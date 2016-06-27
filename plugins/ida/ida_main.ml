@@ -22,24 +22,71 @@ module type Target = sig
   end
 end
 
-let get_symbols =
+let symbolizer_script =
+  let script =
+    {|
+      from bap.utils.ida import dump_symbol_info
+      dump_symbol_info('$output')
+      idc.Exit(0)
+    |} in
   Command.create
     `python
-    ~script:"
-from bap.utils.ida import dump_symbol_info
-dump_symbol_info('$output')
-idc.Exit(0)"
+    ~script
     ~parser:(fun name ->
         let blk_of_sexp x = [%of_sexp:string*int64*int64] x in
         In_channel.with_file name ~f:(fun ch ->
             Sexp.input_sexps ch |> List.map ~f:blk_of_sexp))
+
+let brancher_script =
+  let script =
+    {|
+      from bap.utils.ida import dump_brancher_info
+      dump_brancher_info('$output')
+      idc.Exit(0)
+    |}
+  in
+  Command.create
+    `python
+    ~script
+    ~parser:(fun name ->
+        let branch_of_sexp x = [%of_sexp: (int64 * (int64 * edge) list)] x
+        in
+        In_channel.with_file name ~f:(fun ch ->
+            Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
+
+let extract_branches path =
+  match Ida.(with_file path brancher_script) with
+  | [] ->
+    warning "didn't find any branches";
+    info "this plugin doesn't work with IDA free";
+    []
+  | branches -> branches
+
+let register_brancher_source () =
+  let source =
+    let open Project.Info in
+    Stream.merge file arch ~f:(fun file arch ->
+        Or_error.try_with (fun () ->
+            (*(mem → (asm, kinds) insn →
+              (word option * [ `Cond | `Fall | `Jump ]) list) *)
+            let lookup = extract_branches file in
+            Brancher.create (fun mem insn ->
+                (*let needle = Disasm_expert.Basic.Insn. in*)
+                let addr = Memory.min_addr mem
+                           |> Bitvector.to_int64
+                           |> ok_exn in
+                match List.Assoc.find lookup addr with
+                | None -> []
+                | Some l -> List.map l (fun (x,y) -> (Some (Word.of_int64 x),y))
+              ))) in
+  Brancher.Factory.register name source
 
 let extract path arch =
   let id =
     Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
     | Some syms -> syms
-    | None -> match Ida.(with_file path get_symbols) with
+    | None -> match Ida.(with_file path symbolizer_script) with
       | [] ->
         warning "didn't find any symbols";
         info "this plugin doesn't work with IDA Free";
@@ -51,21 +98,22 @@ let extract path arch =
   List.map syms ~f:(fun (n,s,e) -> n, addr s, addr e) |>
   Seq.of_list
 
-
 let register_source (module T : Target) =
   let source =
     let open Project.Info in
     let extract file arch = Or_error.try_with (fun () ->
+        (* of_blocks takes string addr addr seq *)
+        (* produces a factory source *)
         extract file arch |> T.of_blocks) in
     Stream.merge file arch ~f:extract in
   T.Factory.register name source
 
 let loader_script =
   {|
-from bap.utils.ida import dump_loader_info
-dump_loader_info('$output')
-idc.Exit(0)
-|}
+    from bap.utils.ida import dump_loader_info
+    dump_loader_info('$output')
+    idc.Exit(0)
+  |}
 
 type perm = [`code | `data] [@@deriving sexp]
 type section = string * perm * int * (int64 * int)
@@ -129,7 +177,14 @@ let loader path =
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
-          match Memory.create ~pos ~len endian (addr beg) bits with
+          let mem_or_error =
+            (** either match pos against or -1 or name against "extern" *)
+            match pos with
+            | -1 ->
+              info "Creating synthetic IDA section %s" name;
+              Memory.create ~pos:0 endian (addr beg) bits
+            | _ -> Memory.create ~pos ~len endian (addr beg) bits in
+          match mem_or_error with
           | Error err ->
             info "skipping section %s: %a" name Error.pp err;
             code,data
@@ -171,6 +226,7 @@ let main () =
   register_source (module Rooter);
   register_source (module Symbolizer);
   register_source (module Reconstructor);
+  register_brancher_source ();
   Project.Input.register_loader name loader
 
 let () =
@@ -178,7 +234,7 @@ let () =
       `S "DESCRIPTION";
       `P "This plugin provides rooter, symbolizer and reconstuctor services.";
       `P "If IDA instance is found on the machine, or specified by a
-        user, it will be queried for the specified information."
+                                                        user, it will be queried for the specified information."
     ] in
   let path =
     let doc = "Path to IDA directory." in
