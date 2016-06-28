@@ -22,6 +22,57 @@ module type Target = sig
   end
 end
 
+let brancher_script =
+  let script =
+    {|
+      from bap.utils.ida import dump_brancher_info
+      dump_brancher_info('$output')
+      idc.Exit(0)
+    |} in
+  Command.create
+    `python
+    ~script
+    ~parser:(fun name ->
+        let branch_of_sexp x = [%of_sexp: (int64 * (int64 * edge) list)] x in
+        In_channel.with_file name ~f:(fun ch ->
+            Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
+
+let addr_of_mem mem =
+  Memory.min_addr mem
+  |> Bitvector.to_int64
+  |> function
+  | Ok addr -> Some addr
+  | Error _ -> None
+
+let resolve_dests memory lookup =
+  let open Option in
+  addr_of_mem memory >>= fun addr ->
+  List.Assoc.find lookup addr >>= fun l ->
+  List.map l (fun (x,y) -> (Some (Word.of_int64 x),y))
+  |> return
+
+(** Brancher is created with (mem → (asm, kinds) insn →
+    (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
+let branch_lookup path =
+  match Ida.(with_file path brancher_script) with
+  | [] ->
+    warning "didn't find any branches";
+    info "this plugin doesn't work with IDA free";
+    (fun mem insn -> [])
+  | lookup ->
+    (fun mem insn ->
+       resolve_dests mem lookup
+       |> Option.value ~default:[])
+
+let register_brancher_source () =
+  let source =
+    let open Project.Info in
+    let open Option in
+    Stream.merge file arch ~f:(fun file arch ->
+        Or_error.try_with (fun () ->
+            Brancher.create (branch_lookup file))) in
+  Brancher.Factory.register name source
+
 let symbolizer_script =
   let script =
     {|
@@ -36,50 +87,6 @@ let symbolizer_script =
         let blk_of_sexp x = [%of_sexp:string*int64*int64] x in
         In_channel.with_file name ~f:(fun ch ->
             Sexp.input_sexps ch |> List.map ~f:blk_of_sexp))
-
-let brancher_script =
-  let script =
-    {|
-      from bap.utils.ida import dump_brancher_info
-      dump_brancher_info('$output')
-      idc.Exit(0)
-    |}
-  in
-  Command.create
-    `python
-    ~script
-    ~parser:(fun name ->
-        let branch_of_sexp x = [%of_sexp: (int64 * (int64 * edge) list)] x
-        in
-        In_channel.with_file name ~f:(fun ch ->
-            Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
-
-let extract_branches path =
-  match Ida.(with_file path brancher_script) with
-  | [] ->
-    warning "didn't find any branches";
-    info "this plugin doesn't work with IDA free";
-    []
-  | branches -> branches
-
-let register_brancher_source () =
-  let source =
-    let open Project.Info in
-    Stream.merge file arch ~f:(fun file arch ->
-        Or_error.try_with (fun () ->
-            (*(mem → (asm, kinds) insn →
-              (word option * [ `Cond | `Fall | `Jump ]) list) *)
-            let lookup = extract_branches file in
-            Brancher.create (fun mem insn ->
-                (*let needle = Disasm_expert.Basic.Insn. in*)
-                let addr = Memory.min_addr mem
-                           |> Bitvector.to_int64
-                           |> ok_exn in
-                match List.Assoc.find lookup addr with
-                | None -> []
-                | Some l -> List.map l (fun (x,y) -> (Some (Word.of_int64 x),y))
-              ))) in
-  Brancher.Factory.register name source
 
 let extract path arch =
   let id =
