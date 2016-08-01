@@ -43,6 +43,8 @@ let brancher_command_test =
   In_channel.with_file "/tmp/noot" ~f:(fun ch ->
       Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
 
+(** (addr * (normal flow 0 or 1) (list of "other flows") *)
+(** speculate: (Jump (0 or 1)) (Fall or Cond) *)
 let branch_lookup_of_file f =
   let branch_of_sexp x = [%of_sexp: int64 * int64 option * int64 list] x in
   In_channel.with_file f ~f:(fun ch ->
@@ -64,17 +66,6 @@ let addr_of_mem mem =
   |> function
   | Ok addr -> Some addr
   | Error _ -> None
-
-(*
-let resolve_dests memory lookup =
-  let open Option in
-  addr_of_mem memory >>= fun addr ->
-  List.Assoc.find lookup addr >>= fun l ->
-  List.map l (fun (x,y) ->
-      info "Addr %Lx has dest %Lx" addr x;
-      (Some (Addr.of_int64 ~width:32 x),y))
-  |> return
-*)
 
 type edge = Bap_disasm_block.edge [@@deriving sexp]
 type dest = addr option * edge [@@deriving sexp]
@@ -116,11 +107,18 @@ let print_result mem dests =
 
 let resolve_dests memory insn lookup =
   let open Option in
+  let (!) = Word.of_int64 ~width:32 in
   addr_of_mem memory >>= fun needle ->
   List.find lookup ~f:(fun (addr,_,_) -> needle = addr) >>=
   (* dests is addr option * edge list *)
-  fun (_,opt,rest) -> return [Some (Word.of_int64 needle),`Jump] (* NOT needle. justto
-                                                                    remember word cast*)
+  fun (_,opt,rest) ->
+  (match opt with
+   | Some fall ->
+     printf
+       "Addr: %a. Dest looks like a fallthrough edge: %a\n%!"
+       Addr.pp !needle Addr.pp !fall;
+   | None -> ());
+  return [Some (Word.of_int64 ~width:32 needle),`Jump]
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
@@ -140,23 +138,6 @@ let branch_lookup arch path =
       | None -> []
       | Some dests -> dests
 
-(*
-      let next = Addr.succ (Memory.max_addr mem) in
-      let dests = match Target.lift mem insn with
-        | Error _ -> []
-        | Ok bil -> dests_of_bil bil in
-      let is = Disasm_expert.Basic.Insn.is insn in
-      let fall = Some next, `Fall in
-      let result =
-        match kind_of_dests dests with
-        | `Fall when is `Return -> []
-        | `Jump when is `Call -> fall :: dests
-        | `Cond | `Fall -> fall :: dests
-        | _ -> dests in
-      print_result mem result;
-      result
-*)
-
 let default_branch_lookup arch path =
   let open Bil in
   let module Target = (val target_of_arch arch) in
@@ -169,6 +150,8 @@ let default_branch_lookup arch path =
   | lookup ->
     fun mem insn ->
       let next = Addr.succ (Memory.max_addr mem) in
+      (** This this instruction. Use the bil to extract the
+          destinations *)
       let dests = match Target.lift mem insn with
         | Error _ -> []
         | Ok bil -> dests_of_bil bil in
@@ -197,10 +180,10 @@ let register_brancher_source () =
 let symbolizer_command =
   let script =
     {|
-   from bap.utils.ida import dump_symbol_info
-   dump_symbol_info('$output')
-   idc.Exit(0)
-   |} in
+from bap.utils.ida import dump_symbol_info
+dump_symbol_info('$output')
+idc.Exit(0)
+|} in
   Command.create
     `python
     ~script
@@ -273,10 +256,10 @@ let read_image name =
 let load_image =
   let script =
     {|
-   from bap.utils.ida import dump_loader_info
-   dump_loader_info('$output')
-   idc.Exit(0)
-   |} in
+from bap.utils.ida import dump_loader_info
+dump_loader_info('$output')
+idc.Exit(0)
+|} in
   Command.create `python
     ~script
     ~parser:read_image
