@@ -22,20 +22,41 @@ module type Target = sig
   end
 end
 
-let brancher_script =
+let brancher_command =
   let script =
     {|
-      from bap.utils.ida import dump_brancher_info
-      dump_brancher_info('$output')
-      idc.Exit(0)
-    |} in
+from bap.utils.ida import dump_brancher_info
+dump_brancher_info('$output')
+idc.Exit(0)
+|} in
   Command.create
     `python
     ~script
     ~parser:(fun name ->
-        let branch_of_sexp x = [%of_sexp: (int64 * (int64 * edge) list)] x in
+        let branch_of_sexp x =
+          [%of_sexp: int64 * int64 option * int64 list] x in
         In_channel.with_file name ~f:(fun ch ->
             Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
+
+let brancher_command_test =
+  let branch_of_sexp x = [%of_sexp: int64 * int64 option * int64 list] x in
+  In_channel.with_file "/tmp/noot" ~f:(fun ch ->
+      Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
+
+let branch_lookup_of_file f =
+  let branch_of_sexp x = [%of_sexp: int64 * int64 option * int64 list] x in
+  In_channel.with_file f ~f:(fun ch ->
+      Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
+
+let print_result mem dests =
+  let output x = [%sexp_of: int64 * int64 option * int64 list] x in
+  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
+    (Sexp.to_string (output dests))
+
+let default_print_result mem dests =
+  let output x = [%sexp_of: (addr option * edge) list] x in
+  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
+    (Sexp.to_string (output dests))
 
 let addr_of_mem mem =
   Memory.min_addr mem
@@ -44,42 +65,142 @@ let addr_of_mem mem =
   | Ok addr -> Some addr
   | Error _ -> None
 
+(*
 let resolve_dests memory lookup =
   let open Option in
   addr_of_mem memory >>= fun addr ->
   List.Assoc.find lookup addr >>= fun l ->
-  List.map l (fun (x,y) -> (Some (Word.of_int64 x),y))
+  List.map l (fun (x,y) ->
+      info "Addr %Lx has dest %Lx" addr x;
+      (Some (Addr.of_int64 ~width:32 x),y))
   |> return
+*)
+
+type edge = Bap_disasm_block.edge [@@deriving sexp]
+type dest = addr option * edge [@@deriving sexp]
+type dests = dest list [@@deriving sexp]
+type full_insn = Bap_disasm_basic.full_insn
+
+let kind_of_dests = function
+  | xs when List.for_all xs ~f:(fun (_,x) -> x = `Fall) -> `Fall
+  | xs -> if List.exists  xs ~f:(fun (_,x) -> x = `Jump)
+    then `Jump
+    else `Cond
+
+let kind_of_branches t f =
+  match kind_of_dests t, kind_of_dests f with
+  | `Jump,`Jump -> `Jump
+  | `Fall,`Fall -> `Fall
+  | _           -> `Cond
+
+let fold_consts = Bil.(fixpoint fold_consts)
+
+let rec dests_of_bil (bil : stmt list) : dests =
+  fold_consts bil |> List.concat_map ~f:dests_of_stmt
+and dests_of_stmt = function
+  | Bil.Jmp (Bil.Int addr) -> [Some addr,`Jump]
+  | Bil.Jmp (_) -> [None, `Jump]
+  | Bil.If (_,yes,no) -> merge_branches yes no
+  | Bil.While (_,ss) -> dests_of_bil ss
+  | _ -> []
+and merge_branches yes no =
+  let x = dests_of_bil yes and y = dests_of_bil no in
+  let kind = kind_of_branches x y in
+  List.(rev_append x y >>| fun (a,_) -> a,kind)
+
+(* addr option * edge list *)
+let print_result mem dests =
+  let output x = [%sexp_of: (addr option * edge) list] x in
+  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
+    (Sexp.to_string (output dests))
+
+let resolve_dests memory insn lookup =
+  let open Option in
+  addr_of_mem memory >>= fun needle ->
+  List.find lookup ~f:(fun (addr,_,_) -> needle = addr) >>=
+  (* dests is addr option * edge list *)
+  fun (_,opt,rest) -> return [Some (Word.of_int64 needle),`Jump] (* NOT needle. justto
+                                                                    remember word cast*)
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
-let branch_lookup path =
-  match Ida.(with_file path brancher_script) with
+let branch_lookup arch path =
+  let open Bil in
+  let module Target = (val target_of_arch arch) in
+  let lookup = branch_lookup_of_file "/tmp/noot" in
+  (*match Ida.(with_file path brancher_command) with*) (* XXX *)
+  match lookup with
   | [] ->
     warning "didn't find any branches";
     info "this plugin doesn't work with IDA free";
-    (fun mem insn -> [])
+    fun mem insn -> []
   | lookup ->
-    (fun mem insn ->
-       resolve_dests mem lookup
-       |> Option.value ~default:[])
+    fun mem insn ->
+      match resolve_dests mem insn lookup with
+      | None -> []
+      | Some dests -> dests
+
+(*
+      let next = Addr.succ (Memory.max_addr mem) in
+      let dests = match Target.lift mem insn with
+        | Error _ -> []
+        | Ok bil -> dests_of_bil bil in
+      let is = Disasm_expert.Basic.Insn.is insn in
+      let fall = Some next, `Fall in
+      let result =
+        match kind_of_dests dests with
+        | `Fall when is `Return -> []
+        | `Jump when is `Call -> fall :: dests
+        | `Cond | `Fall -> fall :: dests
+        | _ -> dests in
+      print_result mem result;
+      result
+*)
+
+let default_branch_lookup arch path =
+  let open Bil in
+  let module Target = (val target_of_arch arch) in
+  match Ida.(with_file path brancher_command) with
+  (*match brancher_command_test with*)
+  | [] ->
+    warning "didn't find any branches";
+    info "this plugin doesn't work with IDA free";
+    fun mem insn -> []
+  | lookup ->
+    fun mem insn ->
+      let next = Addr.succ (Memory.max_addr mem) in
+      let dests = match Target.lift mem insn with
+        | Error _ -> []
+        | Ok bil -> dests_of_bil bil in
+      let is = Disasm_expert.Basic.Insn.is insn in
+      let fall = Some next, `Fall in
+      let result =
+        match kind_of_dests dests with
+        | `Fall when is `Return -> []
+        | `Jump when is `Call -> fall :: dests
+        | `Cond | `Fall -> fall :: dests
+        | _ -> dests in
+      default_print_result mem result;
+      result
 
 let register_brancher_source () =
   let source =
     let open Project.Info in
     let open Option in
     Stream.merge file arch ~f:(fun file arch ->
+        (*let default_brancher = Bap_disasm_brancher.of_bil arch in*)
         Or_error.try_with (fun () ->
-            Brancher.create (branch_lookup file))) in
+            Brancher.create (branch_lookup arch file)
+          )) in
   Brancher.Factory.register name source
 
-let symbolizer_script =
+let symbolizer_command =
   let script =
     {|
-      from bap.utils.ida import dump_symbol_info
-      dump_symbol_info('$output')
-      idc.Exit(0)
-    |} in
+   from bap.utils.ida import dump_symbol_info
+   dump_symbol_info('$output')
+   idc.Exit(0)
+   |} in
   Command.create
     `python
     ~script
@@ -93,7 +214,7 @@ let extract path arch =
     Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
     | Some syms -> syms
-    | None -> match Ida.(with_file path symbolizer_script) with
+    | None -> match Ida.(with_file path symbolizer_command) with
       | [] ->
         warning "didn't find any symbols";
         info "this plugin doesn't work with IDA Free";
@@ -114,13 +235,6 @@ let register_source (module T : Target) =
         extract file arch |> T.of_blocks) in
     Stream.merge file arch ~f:extract in
   T.Factory.register name source
-
-let loader_script =
-  {|
-    from bap.utils.ida import dump_loader_info
-    dump_loader_info('$output')
-    idc.Exit(0)
-  |}
 
 type perm = [`code | `data] [@@deriving sexp]
 type section = string * perm * int * (int64 * int)
@@ -156,10 +270,16 @@ let read_image name =
   In_channel.with_file name ~f:(fun ch ->
       Sexp.input_sexp ch |> image_of_sexp)
 
-let load_image = Command.create `python
-    ~script:loader_script
+let load_image =
+  let script =
+    {|
+   from bap.utils.ida import dump_loader_info
+   dump_loader_info('$output')
+   idc.Exit(0)
+   |} in
+  Command.create `python
+    ~script
     ~parser:read_image
-
 
 let mapfile path : Bigstring.t =
   let fd = Unix.(openfile path [O_RDONLY] 0o400) in
@@ -241,7 +361,7 @@ let () =
       `S "DESCRIPTION";
       `P "This plugin provides rooter, symbolizer and reconstuctor services.";
       `P "If IDA instance is found on the machine, or specified by a
-                                                        user, it will be queried for the specified information."
+   user, it will be queried for the specified information."
     ] in
   let path =
     let doc = "Path to IDA directory." in
@@ -253,5 +373,4 @@ let () =
       match checked !path !headless with
       | Result.Ok path -> Bap_ida_service.register path !headless; main ()
       | Result.Error e -> error "%S. Service not registered."
-                            (Error.to_string_hum e)
-    )
+                            (Error.to_string_hum e))
