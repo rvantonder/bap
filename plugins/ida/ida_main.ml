@@ -105,20 +105,87 @@ let print_result mem dests =
   Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
     (Sexp.to_string (output dests))
 
-let resolve_dests memory insn lookup =
+let resolve_dests memory insn lookup arch =
   let open Option in
+  let module Target = (val target_of_arch arch) in
   let (!) = Word.of_int64 ~width:32 in
+  printf "Memory is: %a\n%!" Memory.pp memory;
   addr_of_mem memory >>= fun needle ->
+  printf "Lookup is: %a\n" Addr.pp !needle;
+  (** Only process further if this addr is in our lookup*)
   List.find lookup ~f:(fun (addr,_,_) -> needle = addr) >>=
+
   (* dests is addr option * edge list *)
-  fun (_,opt,rest) ->
-  (match opt with
-   | Some fall ->
-     printf
-       "Addr: %a. Dest looks like a fallthrough edge: %a\n%!"
-       Addr.pp !needle Addr.pp !fall;
-   | None -> ());
-  return [Some (Word.of_int64 ~width:32 needle),`Jump]
+  let default =
+    let next = Addr.succ (Memory.max_addr memory) in
+    let dests = match Target.lift memory insn with
+      | Error _ -> []
+      | Ok bil -> dests_of_bil bil in
+    let is = Disasm_expert.Basic.Insn.is insn in
+    let fall = Some next, `Fall in
+    let result =
+      match kind_of_dests dests with
+      | `Fall when is `Return ->
+        printf "Default says: This is a return thing\n%!";
+        []
+      | `Jump when is `Call ->
+        fall :: dests
+      | `Cond | `Fall ->
+        fall :: dests
+      | `Jump ->
+        printf
+          "Default says: some `Jump, but not adding it to dests. We\
+           only do that for calls.\n%!";
+        dests in
+    result in
+
+  fun (_,opt,(rest : int64 list)) ->
+    printf "Processing %a\n" Addr.pp !needle;
+    (** Result for default brancher: *)
+    (** We want only the semantics of the branch instruction. Ida
+        guarantees us that there is a branch, but we don't know if it's cond
+        or jump. unfortunately ivan coded this retardedly so it's not easy to
+        get the kind separately. *)
+    List.iter default ~f:(fun (addr,kind) ->
+        match addr with
+        | Some addr ->
+          printf "Default: %a : %s\n%!" Addr.pp
+            addr (Sexp.to_string (sexp_of_edge kind))
+        | None -> ());
+    let res =
+      (* handle opt *)
+      match opt with
+      | Some fall ->
+        printf "Addr: %a. %a looks like a fallthrough edge\n%!"
+          Addr.pp !needle Addr.pp !fall;
+        [Some !needle, `Fall]
+      | None -> [] in
+    (* Handle rest *)
+    (match rest with
+     | [] -> res
+     | l ->
+       (**Here, do: Use default to decide. do a lookup. fail hard if
+          we couldn't determinte based on bil. *)
+       List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
+                          Addr.pp !x);
+       (* DECIDE based on default BIL *)
+       let more =
+         List.fold l ~init:[] ~f:(fun acc dest_addr ->
+             (* default contains this addr and knows what kind it is.
+                basically, the default output. *)
+             match List.find default ~f:(fun (addr,_) -> addr = Some !dest_addr) with
+             | Some (Some addr,kind) ->
+               printf "\tFor %a taking BIL type: %s\n"
+                 Addr.pp addr
+                 (Sexp.to_string (sexp_of_edge kind));
+               (Some !dest_addr, kind)::acc
+             | _ -> acc)
+       in
+       more@res)
+    |> fun res ->
+    return res
+(* Problem: not asking for memory address, eg 23d0, because it is not
+   being guided properly. was breaking at 2108. *)
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
@@ -134,7 +201,8 @@ let branch_lookup arch path =
     fun mem insn -> []
   | lookup ->
     fun mem insn ->
-      match resolve_dests mem insn lookup with
+      printf "Checking lookup for %a\n" Memory.pp mem;
+      match resolve_dests mem insn lookup arch with
       | None -> []
       | Some dests -> dests
 
@@ -344,7 +412,7 @@ let () =
       `S "DESCRIPTION";
       `P "This plugin provides rooter, symbolizer and reconstuctor services.";
       `P "If IDA instance is found on the machine, or specified by a
-   user, it will be queried for the specified information."
+          user, it will be queried for the specified information."
     ] in
   let path =
     let doc = "Path to IDA directory." in
