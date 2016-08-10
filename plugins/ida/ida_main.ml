@@ -105,6 +105,65 @@ let print_result mem dests =
   Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
     (Sexp.to_string (output dests))
 
+let section_of_addr project addr =
+  let memory = Project.memory project in
+  Memmap.to_sequence memory |> Seq.find_map ~f:(fun (m,x) ->
+      if (Memory.contains m addr) then
+        match Value.get Image.section x with
+        | Some name -> Some name
+        | None -> None
+      else
+        None)
+
+
+let handle_normal_flow needle =
+  let (!) = Word.of_int64 ~width:32 in
+  function
+  | Some fall ->
+    printf "Addr: %a -> %a. %a : assuming fallthrough edge\n%!"
+      Addr.pp !needle
+      Addr.pp !fall
+      Addr.pp !fall;
+    [Some !fall, `Fall]
+  | None -> []
+
+let handle_other_flow default rest =
+  let (!) = Word.of_int64 ~width:32 in
+  match rest with
+  | [] -> []
+  | l ->
+    (**Here, do: Use default to decide. do a lookup. fail hard if
+       we couldn't determinte based on bil. *)
+    List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
+                       Addr.pp !x);
+    (* DECIDE based on default BIL *)
+    List.fold l ~init:[] ~f:(fun acc dest_addr ->
+        (* default contains this addr and knows what kind it is.
+           basically, the default output. *)
+        match List.find default ~f:(fun (addr,_) -> addr = Some !dest_addr) with
+        (* If the IDA address is in the BIL address, take the same kind*)
+        | Some (Some addr,kind) ->
+          printf "\tFor %a taking BIL type: %s\n"
+            Addr.pp addr
+            (Sexp.to_string (sexp_of_edge kind));
+          (Some !dest_addr, kind)::acc
+        | _ ->
+          (** Two things to do:
+              1) the symbol may be in a synthetic section
+              2) the symbol may be to something that default brancher couldn't
+              figure out (indirect jump) *)
+          (** XXX In all cases just, *assume* jump *)
+          printf "\tSmarter IDA knows about %a, but we don't have \
+                  default semantics in lookup table.\n" Addr.pp
+            !dest_addr;
+          printf "\tBut we're going to make %a a Jump!\n%!"
+            Addr.pp !dest_addr;
+          (*let name = section_of_addr project !dest_addr in
+            (match name with
+            | Some name -> printf "In section %s\n%!" name
+            | None -> printf "No section found\n%!");*)
+          (Some !dest_addr, `Jump)::acc) (* heuristic *)
+
 let resolve_dests memory insn lookup arch =
   let open Option in
   let module Target = (val target_of_arch arch) in
@@ -152,37 +211,9 @@ let resolve_dests memory insn lookup arch =
           printf "Default: %a : %s\n%!" Addr.pp
             addr (Sexp.to_string (sexp_of_edge kind))
         | None -> ());
-    let res =
-      (* handle opt *)
-      match opt with
-      | Some fall ->
-        printf "Addr: %a. %a looks like a fallthrough edge\n%!"
-          Addr.pp !needle Addr.pp !fall;
-        [Some !needle, `Fall]
-      | None -> [] in
-    (* Handle rest *)
-    (match rest with
-     | [] -> res
-     | l ->
-       (**Here, do: Use default to decide. do a lookup. fail hard if
-          we couldn't determinte based on bil. *)
-       List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
-                          Addr.pp !x);
-       (* DECIDE based on default BIL *)
-       let more =
-         List.fold l ~init:[] ~f:(fun acc dest_addr ->
-             (* default contains this addr and knows what kind it is.
-                basically, the default output. *)
-             match List.find default ~f:(fun (addr,_) -> addr = Some !dest_addr) with
-             | Some (Some addr,kind) ->
-               printf "\tFor %a taking BIL type: %s\n"
-                 Addr.pp addr
-                 (Sexp.to_string (sexp_of_edge kind));
-               (Some !dest_addr, kind)::acc
-             | _ -> acc)
-       in
-       more@res)
-    |> fun res ->
+    let normal_flow = handle_normal_flow needle opt in
+    let other_flow = handle_other_flow default rest in
+    other_flow@normal_flow |> fun res ->
     return res
 (* Problem: not asking for memory address, eg 23d0, because it is not
    being guided properly. was breaking at 2108. *)
@@ -201,7 +232,7 @@ let branch_lookup arch path =
     fun mem insn -> []
   | lookup ->
     fun mem insn ->
-      printf "Checking lookup for %a\n" Memory.pp mem;
+      printf "\nChecking lookup for %a\n" Memory.pp mem;
       match resolve_dests mem insn lookup arch with
       | None -> []
       | Some dests -> dests
@@ -274,8 +305,9 @@ let extract path arch =
   let size = Arch.addr_size arch in
   let width = Size.in_bits size in
   let addr = Addr.of_int64 ~width in
-  List.map syms ~f:(fun (n,s,e) -> n, addr s, addr e) |>
-  Seq.of_list
+  let res =
+    List.map syms ~f:(fun (n,s,e) -> n, addr s, addr e) in
+  Seq.of_list res
 
 let register_source (module T : Target) =
   let source =
@@ -286,6 +318,27 @@ let register_source (module T : Target) =
         extract file arch |> T.of_blocks) in
     Stream.merge file arch ~f:extract in
   T.Factory.register name source
+
+let register_symbolizer_source () =
+  let source =
+    let open Project.Info in
+    let extract file arch = Or_error.try_with (fun () ->
+        let s' = Symbolizer.create (fun addr ->
+            if addr = (Word.of_int ~width:32 0x10F28) then
+              Some "Look_ma"
+            else
+              None) in
+        let default =
+          extract file arch |> Symbolizer.of_blocks in
+        Symbolizer.chain [s';default]) in
+    Stream.merge file arch ~f:extract in
+  Symbolizer.Factory.register name source
+
+(** We need to add a basic block in the synthetic sections. Brancher
+    points there, so it *will* be disassembled. It just won't
+    fixup the bl 0x0 crap yet. *)
+
+(*let create_synthetic_blocks () =*)
 
 type perm = [`code | `data] [@@deriving sexp]
 type section = string * perm * int * (int64 * int)
@@ -342,7 +395,8 @@ let mapfile path : Bigstring.t =
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
       (Digest.file path) in
-  let (proc,size,sections) = match Img.Cache.load id with
+  let (proc,size,sections) =
+    match Img.Cache.load id with
     | Some img -> img
     | None ->
       let img = Ida.with_file path load_image in
@@ -359,8 +413,8 @@ let loader path =
             (** either match pos against or -1 or name against "extern" *)
             match pos with
             | -1 ->
-              info "Creating synthetic IDA section %s" name;
-              Memory.create ~pos:0 endian (addr beg) bits
+              info "Creating synthetic IDA section %s with len %d" name len;
+              Memory.create ~pos:0 ~len endian (addr beg) bits
             | _ -> Memory.create ~pos ~len endian (addr beg) bits in
           match mem_or_error with
           | Error err ->
@@ -370,6 +424,7 @@ let loader path =
             let sec = Value.create Image.section name in
             if perm = `code
             then Memmap.add code mem sec, data
+            else if name = "extern" then Memmap.add code mem sec, data
             else code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
 
@@ -402,7 +457,8 @@ let checked ida_path is_headless =
 
 let main () =
   register_source (module Rooter);
-  register_source (module Symbolizer);
+  (*register_source (module Symbolizer);*)
+  register_symbolizer_source (); (* add virtual symbols of ko *)
   register_source (module Reconstructor);
   register_brancher_source ();
   Project.Input.register_loader name loader
@@ -412,7 +468,7 @@ let () =
       `S "DESCRIPTION";
       `P "This plugin provides rooter, symbolizer and reconstuctor services.";
       `P "If IDA instance is found on the machine, or specified by a
-          user, it will be queried for the specified information."
+                 user, it will be queried for the specified information."
     ] in
   let path =
     let doc = "Path to IDA directory." in
