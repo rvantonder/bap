@@ -377,30 +377,46 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
-let tag_branches_of_mem_extern memmap mem =
+(** In theory, it should work with any tag, even if i steal it from
+    Bir. The problem is it is attached to Memory and not bir, so we will
+    have to test manaully with a plugin *)
+let tag_branches_of_mem_extern memmap extern_mem =
   let (!) = Word.of_int64 ~width:32 in
   let lookup = branch_lookup_of_file "/tmp/noot" in
   let res =
-    Memory.view ~word_size:`r8 ~from:(Memory.min_addr mem)
-      ~words:4 mem >>= fun mem' ->
-    printf "Looking up memory part %a\n%!" Memory.pp mem';
-    let ida_other_dest = List.find_map lookup ~f:(fun (addr,_,l) ->
-        match List.hd l with
-        | Some dest_addr ->
-          if Memory.min_addr mem' = !dest_addr then
-            (printf "Success! Tagging %a with %a\n" Addr.pp !addr
-               Addr.pp !dest_addr;
-             Some (Int64.to_string addr))
-          else None
-        | None -> None)
-    in
-    let s = Option.value ~default:"fuck" ida_other_dest in
-    printf "Adding tag %s\n%!" s;
-    Memmap.add memmap mem' (Value.create comment s) |> Or_error.return
+    Memory.min_addr extern_mem |> Addr.to_int >>= fun _begin ->
+    Memory.length extern_mem |> fun size ->
+    let offsets =
+      List.range ~stride:4 _begin (_begin+size) in
+    List.fold ~init:(Or_error.return memmap) offsets ~f:(fun memmap offset ->
+        Memory.view ~word_size:`r8 ~from:(Addr.of_int ~width:32 offset)
+          ~words:4 extern_mem >>= fun mem' ->
+        printf "Looking up memory part %a\n%!" Memory.pp mem';
+        (* for each addr in lookup, if its got a dest that is in extern,
+           annotate it *)
+        let ida_other_dest = List.find_map lookup ~f:(fun (addr,_,l) ->
+            match List.hd l with
+            | Some dest_addr ->
+              if Memory.min_addr mem' = !dest_addr then
+                (printf "Success! Tagging %a with %a\n" Addr.pp !addr
+                   Addr.pp !dest_addr;
+                 Some (Int64.to_string addr))
+              else None
+            | None -> None)
+        in
+        let s = Option.value ~default:"fuck" ida_other_dest in
+        printf "Adding tag %s\n%!" s;
+        (** TODO: make dedicated tag. let vars : taints Var.Map.t tag =
+            Value.Tag.register
+            ~name:"taint_vars"
+            ~uuid:"03c90a60-e19f-43cc-8049-fdeb23973396"
+            (module Tainted_vars) *)
+        memmap >>= fun memmap ->
+        Memmap.add memmap mem' (Value.create comment s) |> Or_error.return)
   in
   match res with
-  | Ok res -> printf "OTAY!\n%!"; res
-  | Error _ -> printf "Nevermind then\n%!"; memmap
+  | Ok memmap' -> memmap
+  | Error _ -> memmap
 
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
