@@ -411,11 +411,11 @@ let tag_branches_of_mem_extern memmap extern_mem =
             ~name:"taint_vars"
             ~uuid:"03c90a60-e19f-43cc-8049-fdeb23973396"
             (module Tainted_vars) *)
-        memmap >>= fun memmap ->
-        Memmap.add memmap mem' (Value.create comment s) |> Or_error.return)
+        memmap >>= fun memmap' ->
+        Memmap.add memmap' mem' (Value.create comment s) |> Or_error.return)
   in
   match res with
-  | Ok memmap' -> memmap
+  | Ok memmap' -> memmap'
   | Error _ -> memmap
 
 let loader path =
