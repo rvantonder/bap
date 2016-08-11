@@ -105,17 +105,6 @@ let print_result mem dests =
   Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
     (Sexp.to_string (output dests))
 
-let section_of_addr project addr =
-  let memory = Project.memory project in
-  Memmap.to_sequence memory |> Seq.find_map ~f:(fun (m,x) ->
-      if (Memory.contains m addr) then
-        match Value.get Image.section x with
-        | Some name -> Some name
-        | None -> None
-      else
-        None)
-
-
 let handle_normal_flow needle =
   let (!) = Word.of_int64 ~width:32 in
   function
@@ -158,10 +147,6 @@ let handle_other_flow default rest =
             !dest_addr;
           printf "\tBut we're going to make %a a Jump!\n%!"
             Addr.pp !dest_addr;
-          (*let name = section_of_addr project !dest_addr in
-            (match name with
-            | Some name -> printf "In section %s\n%!" name
-            | None -> printf "No section found\n%!");*)
           (Some !dest_addr, `Jump)::acc) (* heuristic *)
 
 let resolve_dests memory insn lookup arch =
@@ -392,6 +377,31 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
+let tag_branches_of_mem_extern memmap mem =
+  let (!) = Word.of_int64 ~width:32 in
+  let lookup = branch_lookup_of_file "/tmp/noot" in
+  let res =
+    Memory.view ~word_size:`r8 ~from:(Memory.min_addr mem)
+      ~words:4 mem >>= fun mem' ->
+    printf "Looking up memory part %a\n%!" Memory.pp mem';
+    let ida_other_dest = List.find_map lookup ~f:(fun (addr,_,l) ->
+        match List.hd l with
+        | Some dest_addr ->
+          if Memory.min_addr mem' = !dest_addr then
+            (printf "Success! Tagging %a with %a\n" Addr.pp !addr
+               Addr.pp !dest_addr;
+             Some (Int64.to_string addr))
+          else None
+        | None -> None)
+    in
+    let s = Option.value ~default:"fuck" ida_other_dest in
+    printf "Adding tag %s\n%!" s;
+    Memmap.add memmap mem' (Value.create comment s) |> Or_error.return
+  in
+  match res with
+  | Ok res -> printf "OTAY!\n%!"; res
+  | Error _ -> printf "Nevermind then\n%!"; memmap
+
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
       (Digest.file path) in
@@ -424,7 +434,11 @@ let loader path =
             let sec = Value.create Image.section name in
             if perm = `code
             then Memmap.add code mem sec, data
-            else if name = "extern" then Memmap.add code mem sec, data
+            else if name = "extern" then
+              (** Add branch info to memory *)
+              let memmap' = Memmap.add code mem sec in
+              let memmap' = tag_branches_of_mem_extern memmap' mem in
+              memmap',data
             else code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
 
@@ -456,7 +470,7 @@ let checked ida_path is_headless =
 
 
 let main () =
-  register_source (module Rooter);
+  register_source (module Rooter); (* TODO fix extern symbols *)
   (*register_source (module Symbolizer);*)
   register_symbolizer_source (); (* add virtual symbols of ko *)
   register_source (module Reconstructor);
