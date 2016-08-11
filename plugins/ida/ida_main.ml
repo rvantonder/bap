@@ -380,20 +380,20 @@ let mapfile path : Bigstring.t =
 (** In theory, it should work with any tag, even if i steal it from
     Bir. The problem is it is attached to Memory and not bir, so we will
     have to test manaully with a plugin *)
+(** Tag lookup addr places with extern value *)
 let tag_branches_of_mem_extern memmap extern_mem =
   let (!) = Word.of_int64 ~width:32 in
   let lookup = branch_lookup_of_file "/tmp/noot" in
   let res =
     Memory.min_addr extern_mem |> Addr.to_int >>= fun _begin ->
     Memory.length extern_mem |> fun size ->
-    let offsets =
-      List.range ~stride:4 _begin (_begin+size) in
+    let offsets = List.range ~stride:4 _begin (_begin+size) in
     List.fold ~init:(Or_error.return memmap) offsets ~f:(fun memmap offset ->
         Memory.view ~word_size:`r8 ~from:(Addr.of_int ~width:32 offset)
           ~words:4 extern_mem >>= fun mem' ->
         printf "Looking up memory part %a\n%!" Memory.pp mem';
-        (* for each addr in lookup, if its got a dest that is in extern,
-           annotate it *)
+        (* for each addr in lookup, if its got a dest that is in
+           extern, annotate it *)
         let ida_other_dest = List.find_map lookup ~f:(fun (addr,_,l) ->
             match List.hd l with
             | Some dest_addr ->
@@ -453,6 +453,8 @@ let loader path =
             else if name = "extern" then
               (** Add branch info to memory *)
               let memmap' = Memmap.add code mem sec in
+              (** annotate all the places which jump with info we have
+                  from IDA *)
               let memmap' = tag_branches_of_mem_extern memmap' mem in
               memmap',data
             else code, Memmap.add data mem sec) in
