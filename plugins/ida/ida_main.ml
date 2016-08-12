@@ -382,41 +382,39 @@ let mapfile path : Bigstring.t =
     have to test manaully with a plugin *)
 (** Tag lookup addr places with extern value *)
 let tag_branches_of_mem_extern memmap extern_mem =
+  let open Or_error in
   let (!) = Word.of_int64 ~width:32 in
   let lookup = branch_lookup_of_file "/tmp/noot" in
   let res =
-    Memory.min_addr extern_mem |> Addr.to_int >>= fun _begin ->
-    Memory.length extern_mem |> fun size ->
-    let offsets = List.range ~stride:4 _begin (_begin+size) in
-    List.fold ~init:(Or_error.return memmap) offsets ~f:(fun memmap offset ->
-        Memory.view ~word_size:`r8 ~from:(Addr.of_int ~width:32 offset)
-          ~words:4 extern_mem >>= fun mem' ->
-        printf "Looking up memory part %a\n%!" Memory.pp mem';
-        (* for each addr in lookup, if its got a dest that is in
-           extern, annotate it *)
-        let ida_other_dest = List.find_map lookup ~f:(fun (addr,_,l) ->
-            match List.hd l with
-            | Some dest_addr ->
-              if Memory.min_addr mem' = !dest_addr then
-                (printf "Success! Tagging %a with %a\n" Addr.pp !addr
-                   Addr.pp !dest_addr;
-                 Some (Int64.to_string addr))
-              else None
-            | None -> None)
-        in
-        let s = Option.value ~default:"fuck" ida_other_dest in
-        printf "Adding tag %s\n%!" s;
-        (** TODO: make dedicated tag. let vars : taints Var.Map.t tag =
-            Value.Tag.register
-            ~name:"taint_vars"
-            ~uuid:"03c90a60-e19f-43cc-8049-fdeb23973396"
-            (module Tainted_vars) *)
-        memmap >>= fun memmap' ->
-        Memmap.add memmap' mem' (Value.create comment s) |> Or_error.return)
-  in
-  match res with
-  | Ok memmap' -> memmap'
-  | Error _ -> memmap
+    Memmap.to_sequence memmap
+    |> Seq.fold ~init:(return memmap) ~f:(fun memmap' (mem,x) ->
+        printf "Iterating mems...\n%!";
+        List.fold ~init:memmap' lookup ~f:(fun memmap_inner (addr,_,l) ->
+            (* try get a view for the address in lookup, for this mem *)
+            match Memory.view ~word_size:`r8 ~from:!addr ~words:4 mem
+            with
+            | Ok mem' ->
+              (printf "Can has mem %d\n%!" @@ Memory.length mem';
+               match List.hd l with
+               (* may be in extern or e.g. 0xf480*)
+               | Some dest ->
+                 printf "SUCCESS, dest addr is %s\n%!" @@ Int64.to_string dest;
+                 (* It's trying to add a big mem to a smaller mem
+                    (extern) sometimes *)
+                 (match memmap_inner with
+                  | Ok memmap_inner ->
+                    printf "Warn %d\n%!" @@ Memory.length mem';
+                    Memmap.add memmap_inner mem'
+                      (Value.create comment (Int64.to_string dest))
+                    |> return
+                  | Error e ->
+                    printf "WTF returning %s\n%!" @@ Error.to_string_hum e;
+                    memmap_inner)
+               | None -> memmap_inner)
+            | Error e -> memmap_inner))
+  in match res with
+  | Ok res -> printf "Result is good!\n%!"; res
+  | Error e -> printf "Error! %s\n%!" @@ Error.to_string_hum e; memmap
 
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
