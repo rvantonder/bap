@@ -382,39 +382,23 @@ let mapfile path : Bigstring.t =
     have to test manaully with a plugin *)
 (** Tag lookup addr places with extern value *)
 let tag_branches_of_mem_extern memmap extern_mem =
-  let open Or_error in
   let (!) = Word.of_int64 ~width:32 in
   let lookup = branch_lookup_of_file "/tmp/noot" in
-  let res =
-    Memmap.to_sequence memmap
-    |> Seq.fold ~init:(return memmap) ~f:(fun memmap' (mem,x) ->
-        printf "Iterating mems...\n%!";
-        List.fold ~init:memmap' lookup ~f:(fun memmap_inner (addr,_,l) ->
-            (* try get a view for the address in lookup, for this mem *)
-            match Memory.view ~word_size:`r8 ~from:!addr ~words:4 mem
-            with
-            | Ok mem' ->
-              (printf "Can has mem %d\n%!" @@ Memory.length mem';
-               match List.hd l with
-               (* may be in extern or e.g. 0xf480*)
-               | Some dest ->
-                 printf "SUCCESS, dest addr is %s\n%!" @@ Int64.to_string dest;
-                 (* It's trying to add a big mem to a smaller mem
-                    (extern) sometimes *)
-                 (match memmap_inner with
-                  | Ok memmap_inner ->
-                    printf "Warn %d\n%!" @@ Memory.length mem';
-                    Memmap.add memmap_inner mem'
-                      (Value.create comment (Int64.to_string dest))
-                    |> return
-                  | Error e ->
-                    printf "WTF returning %s\n%!" @@ Error.to_string_hum e;
-                    memmap_inner)
-               | None -> memmap_inner)
-            | Error e -> memmap_inner))
-  in match res with
-  | Ok res -> printf "Result is good!\n%!"; res
-  | Error e -> printf "Error! %s\n%!" @@ Error.to_string_hum e; memmap
+  let (!@) x =
+    let open Or_error in
+    match x with
+    | Ok x -> Some x
+    | Error _ -> None in
+  let open Option in
+  Memmap.to_sequence memmap
+  |> Seq.fold ~init:memmap ~f:(fun memmap' (mem,x) ->
+      printf "Iterating mems...\n%!";
+      List.fold ~init:memmap' lookup ~f:(fun memmap_inner (addr,_,l) ->
+          (!@(Memory.view ~word_size:`r8 ~from:!addr ~words:4 mem)
+           >>= fun mem' -> List.hd l >>= fun dest ->
+           Memmap.add memmap_inner mem'
+             (Value.create comment (Int64.to_string dest)) |> return)
+          |> Option.value ~default:memmap_inner))
 
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
