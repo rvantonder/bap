@@ -38,11 +38,6 @@ idc.Exit(0)
         In_channel.with_file name ~f:(fun ch ->
             Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
 
-let brancher_command_test =
-  let branch_of_sexp x = [%of_sexp: int64 * int64 option * int64 list] x in
-  In_channel.with_file "/tmp/noot" ~f:(fun ch ->
-      Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
-
 (** (addr * (normal flow 0 or 1) (list of "other flows") *)
 (** speculate: (Jump (0 or 1)) (Fall or Cond) *)
 let branch_lookup_of_file f =
@@ -136,7 +131,7 @@ let handle_other_flow default rest =
 let resolve_dests memory insn lookup arch =
   let open Option in
   let module Target = (val target_of_arch arch) in
-  let (!) = Word.of_int64 ~width:32 in
+  (*let (!) = Word.of_int64 ~width:32 in*)
   (*printf "Memory is: %a\n%!" Memory.pp memory;*)
   addr_of_mem memory >>= fun needle ->
   (*printf "Lookup is: %a\n" Addr.pp !needle;*)
@@ -174,12 +169,12 @@ let resolve_dests memory insn lookup arch =
         guarantees us that there is a branch, but we don't know if it's cond
         or jump. unfortunately ivan coded this retardedly so it's not easy to
         get the kind separately. *)
-    List.iter default ~f:(fun (addr,kind) ->
+    (*List.iter default ~f:(fun (addr,kind) ->
         match addr with
         | Some addr ->
-          (*printf "Default: %a : %s\n%!" Addr.pp
-            addr (Sexp.to_string (sexp_of_edge kind))*)
-        | None -> ());
+          printf "Default: %a : %s\n%!" Addr.pp
+            addr (Sexp.to_string (sexp_of_edge kind))
+        | None -> ());*)
     let normal_flow = handle_normal_flow needle opt in
     let other_flow = handle_other_flow default rest in
     other_flow@normal_flow |> fun res ->
@@ -192,8 +187,8 @@ let resolve_dests memory insn lookup arch =
 let branch_lookup arch path =
   let open Bil in
   let module Target = (val target_of_arch arch) in
-  let lookup = branch_lookup_of_file "/tmp/noot" in
-  (*match Ida.(with_file path brancher_command) with*) (* XXX *)
+  (*let lookup = branch_lookup_of_file "/tmp/noot" in *)
+  let lookup = Ida.with_file path brancher_command in
   match lookup with
   | [] ->
     warning "didn't find any branches";
@@ -206,6 +201,7 @@ let branch_lookup arch path =
       | None -> []
       | Some dests -> dests
 
+(* NEED LOOKUP *)
 let register_brancher_source () =
   let source =
     let open Project.Info in
@@ -213,6 +209,8 @@ let register_brancher_source () =
     Stream.merge file arch ~f:(fun file arch ->
         (*let default_brancher = Bap_disasm_brancher.of_bil arch in*)
         Or_error.try_with (fun () ->
+            (* NEED LOOKUP. which NEEDS file path (string from
+                Project.Info.file stream) *)
             Brancher.create (branch_lookup arch file)
           )) in
   Brancher.Factory.register name source
@@ -237,7 +235,7 @@ let extract path arch =
     Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
     | Some syms -> syms
-    | None -> match Ida.(with_file path symbolizer_command) with
+    | None -> match Ida.with_file path symbolizer_command with
       | [] ->
         warning "didn't find any symbols";
         info "this plugin doesn't work with IDA Free";
@@ -252,12 +250,11 @@ let extract path arch =
 
 let register_source (module T : Target) =
   let source =
-    let open Project.Info in
     let extract file arch = Or_error.try_with (fun () ->
         (* of_blocks takes string addr addr seq *)
         (* produces a factory source *)
         extract file arch |> T.of_blocks) in
-    Stream.merge file arch ~f:extract in
+    Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
 
 let register_symbolizer_source () =
@@ -333,8 +330,10 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
-let tag_branches_of_mem_extern memmap =
-  let lookup = branch_lookup_of_file "/tmp/noot" in
+(* NEEDS lookup *)
+let tag_branches_of_mem_extern memmap path =
+  (*let lookup = branch_lookup_of_file "/tmp/noot" in*)
+  let lookup = Ida.with_file path brancher_command in
   let (!) = Word.of_int64 ~width:32 in
   let (!@) x =
     let open Or_error in
@@ -351,6 +350,7 @@ let tag_branches_of_mem_extern memmap =
              (Value.create comment (Int64.to_string dest)) |> return)
           |> Option.value ~default:memmap_inner))
 
+(* NEEDS lookup. It gets path automatically *)
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
       (Digest.file path) in
@@ -388,7 +388,8 @@ let loader path =
               let memmap' = Memmap.add code mem sec in
               (** annotate all the places which jump with info we have
                   from IDA *)
-              let memmap' = tag_branches_of_mem_extern memmap' in
+              (* NEEDS lookup *)
+              let memmap' = tag_branches_of_mem_extern memmap' path in
               memmap',data
             else code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
@@ -425,7 +426,9 @@ let main () =
   (*register_source (module Symbolizer);*)
   register_symbolizer_source (); (* add virtual symbols of ko *)
   register_source (module Reconstructor);
+  (* NEED LOOKUP *)
   register_brancher_source ();
+  (* NEEDS lookup *)
   Project.Input.register_loader name loader
 
 let () =
