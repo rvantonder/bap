@@ -211,8 +211,7 @@ let register_brancher_source () =
         Or_error.try_with (fun () ->
             (* NEED LOOKUP. which NEEDS file path (string from
                 Project.Info.file stream) *)
-            Brancher.create (branch_lookup arch file)
-          )) in
+            Brancher.create (branch_lookup arch file))) in
   Brancher.Factory.register name source
 
 let symbolizer_command =
@@ -251,8 +250,6 @@ let extract path arch =
 let register_source (module T : Target) =
   let source =
     let extract file arch = Or_error.try_with (fun () ->
-        (* of_blocks takes string addr addr seq *)
-        (* produces a factory source *)
         extract file arch |> T.of_blocks) in
     Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
@@ -272,12 +269,6 @@ let register_symbolizer_source () =
     Stream.merge file arch ~f:extract in
   Symbolizer.Factory.register name source
 
-(** We need to add a basic block in the synthetic sections. Brancher
-    points there, so it *will* be disassembled. It just won't
-    fixup the bl 0x0 crap yet. *)
-
-(*let create_synthetic_blocks () =*)
-
 type perm = [`code | `data] [@@deriving sexp]
 type section = string * perm * int * (int64 * int)
   [@@deriving sexp]
@@ -288,7 +279,6 @@ module Img = Data.Make(struct
     type t = image
     let version = "0.1"
   end)
-
 
 exception Unsupported_architecture of string
 
@@ -350,6 +340,16 @@ let tag_branches_of_mem_extern memmap path =
              (Value.create comment (Int64.to_string dest)) |> return)
           |> Option.value ~default:memmap_inner))
 
+let create_mem pos len endian beg bits size =
+  let addr = Addr.of_int64 ~width:(Size.in_bits size) in
+  (* For synthetic regions, either match pos against or -1 or name
+      against "extern" *)
+  match pos with
+  | -1 ->
+    info "Creating synthetic IDA section %s with len %d" name len;
+    Memory.create ~pos:0 ~len endian (addr beg) bits
+  | _ -> Memory.create ~pos ~len endian (addr beg) bits
+
 (* NEEDS lookup. It gets path automatically *)
 let loader path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
@@ -364,34 +364,25 @@ let loader path =
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
   let endian = Arch.endian arch in
-  let addr = Addr.of_int64 ~width:(Size.in_bits size) in
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
-          let mem_or_error =
-            (** either match pos against or -1 or name against "extern" *)
-            match pos with
-            | -1 ->
-              info "Creating synthetic IDA section %s with len %d" name len;
-              Memory.create ~pos:0 ~len endian (addr beg) bits
-            | _ -> Memory.create ~pos ~len endian (addr beg) bits in
+          let mem_or_error = create_mem pos len endian beg bits size in
           match mem_or_error with
           | Error err ->
             info "skipping section %s: %a" name Error.pp err;
             code,data
           | Ok mem ->
             let sec = Value.create Image.section name in
-            if perm = `code
-            then Memmap.add code mem sec, data
-            else if name = "extern" then
-              (** Add branch info to memory *)
-              let memmap' = Memmap.add code mem sec in
-              (** annotate all the places which jump with info we have
-                  from IDA *)
-              (* NEEDS lookup *)
-              let memmap' = tag_branches_of_mem_extern memmap' path in
-              memmap',data
-            else code, Memmap.add data mem sec) in
+            match perm,name with
+            | `code,_ -> Memmap.add code mem sec, data
+            | _,"extern" ->
+              (* Add "extern" mem to code memmap *)
+              let code' = Memmap.add code mem sec in
+              (* annotate insns that branch to extern *)
+              let code' = tag_branches_of_mem_extern code' path in
+              code',data
+            | _ -> code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
 
 let require req check =
