@@ -50,16 +50,6 @@ let branch_lookup_of_file f =
   In_channel.with_file f ~f:(fun ch ->
       Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
 
-let print_result mem dests =
-  let output x = [%sexp_of: int64 * int64 option * int64 list] x in
-  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
-    (Sexp.to_string (output dests))
-
-let default_print_result mem dests =
-  let output x = [%sexp_of: (addr option * edge) list] x in
-  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
-    (Sexp.to_string (output dests))
-
 let addr_of_mem mem =
   Memory.min_addr mem
   |> Bitvector.to_int64
@@ -99,20 +89,14 @@ and merge_branches yes no =
   let kind = kind_of_branches x y in
   List.(rev_append x y >>| fun (a,_) -> a,kind)
 
-(* addr option * edge list *)
-let print_result mem dests =
-  let output x = [%sexp_of: (addr option * edge) list] x in
-  Format.printf "(%a %s)\n%!" Addr.pp (Memory.min_addr mem)
-    (Sexp.to_string (output dests))
-
 let handle_normal_flow needle =
   let (!) = Word.of_int64 ~width:32 in
   function
   | Some fall ->
-    printf "Addr: %a -> %a. %a : assuming fallthrough edge\n%!"
+    (*printf "Addr: %a -> %a. %a : assuming fallthrough edge\n%!"
       Addr.pp !needle
       Addr.pp !fall
-      Addr.pp !fall;
+      Addr.pp !fall;*)
     [Some !fall, `Fall]
   | None -> []
 
@@ -123,8 +107,8 @@ let handle_other_flow default rest =
   | l ->
     (**Here, do: Use default to decide. do a lookup. fail hard if
        we couldn't determinte based on bil. *)
-    List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
-                       Addr.pp !x);
+    (*List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
+                       Addr.pp !x);*)
     (* DECIDE based on default BIL *)
     List.fold l ~init:[] ~f:(fun acc dest_addr ->
         (* default contains this addr and knows what kind it is.
@@ -132,9 +116,9 @@ let handle_other_flow default rest =
         match List.find default ~f:(fun (addr,_) -> addr = Some !dest_addr) with
         (* If the IDA address is in the BIL address, take the same kind*)
         | Some (Some addr,kind) ->
-          printf "\tFor %a taking BIL type: %s\n"
+          (*printf "\tFor %a taking BIL type: %s\n"
             Addr.pp addr
-            (Sexp.to_string (sexp_of_edge kind));
+            (Sexp.to_string (sexp_of_edge kind));*)
           (Some !dest_addr, kind)::acc
         | _ ->
           (** Two things to do:
@@ -142,20 +126,20 @@ let handle_other_flow default rest =
               2) the symbol may be to something that default brancher couldn't
               figure out (indirect jump) *)
           (** XXX In all cases just, *assume* jump *)
-          printf "\tSmarter IDA knows about %a, but we don't have \
+          (*printf "\tSmarter IDA knows about %a, but we don't have \
                   default semantics in lookup table.\n" Addr.pp
-            !dest_addr;
-          printf "\tBut we're going to make %a a Jump!\n%!"
-            Addr.pp !dest_addr;
+            !dest_addr;*)
+          (*printf "\tBut we're going to make %a a Jump!\n%!"
+            Addr.pp !dest_addr;*)
           (Some !dest_addr, `Jump)::acc) (* heuristic *)
 
 let resolve_dests memory insn lookup arch =
   let open Option in
   let module Target = (val target_of_arch arch) in
   let (!) = Word.of_int64 ~width:32 in
-  printf "Memory is: %a\n%!" Memory.pp memory;
+  (*printf "Memory is: %a\n%!" Memory.pp memory;*)
   addr_of_mem memory >>= fun needle ->
-  printf "Lookup is: %a\n" Addr.pp !needle;
+  (*printf "Lookup is: %a\n" Addr.pp !needle;*)
   (** Only process further if this addr is in our lookup*)
   List.find lookup ~f:(fun (addr,_,_) -> needle = addr) >>=
 
@@ -170,21 +154,21 @@ let resolve_dests memory insn lookup arch =
     let result =
       match kind_of_dests dests with
       | `Fall when is `Return ->
-        printf "Default says: This is a return thing\n%!";
+        (*printf "Default says: This is a return thing\n%!";*)
         []
       | `Jump when is `Call ->
         fall :: dests
       | `Cond | `Fall ->
         fall :: dests
       | `Jump ->
-        printf
+        (*printf
           "Default says: some `Jump, but not adding it to dests. We\
-           only do that for calls.\n%!";
+           only do that for calls.\n%!";*)
         dests in
     result in
 
   fun (_,opt,(rest : int64 list)) ->
-    printf "Processing %a\n" Addr.pp !needle;
+    (*printf "Processing %a\n" Addr.pp !needle;*)
     (** Result for default brancher: *)
     (** We want only the semantics of the branch instruction. Ida
         guarantees us that there is a branch, but we don't know if it's cond
@@ -193,8 +177,8 @@ let resolve_dests memory insn lookup arch =
     List.iter default ~f:(fun (addr,kind) ->
         match addr with
         | Some addr ->
-          printf "Default: %a : %s\n%!" Addr.pp
-            addr (Sexp.to_string (sexp_of_edge kind))
+          (*printf "Default: %a : %s\n%!" Addr.pp
+            addr (Sexp.to_string (sexp_of_edge kind))*)
         | None -> ());
     let normal_flow = handle_normal_flow needle opt in
     let other_flow = handle_other_flow default rest in
@@ -217,38 +201,10 @@ let branch_lookup arch path =
     fun mem insn -> []
   | lookup ->
     fun mem insn ->
-      printf "\nChecking lookup for %a\n" Memory.pp mem;
+      (*printf "\nChecking lookup for %a\n" Memory.pp mem;*)
       match resolve_dests mem insn lookup arch with
       | None -> []
       | Some dests -> dests
-
-let default_branch_lookup arch path =
-  let open Bil in
-  let module Target = (val target_of_arch arch) in
-  match Ida.(with_file path brancher_command) with
-  (*match brancher_command_test with*)
-  | [] ->
-    warning "didn't find any branches";
-    info "this plugin doesn't work with IDA free";
-    fun mem insn -> []
-  | lookup ->
-    fun mem insn ->
-      let next = Addr.succ (Memory.max_addr mem) in
-      (** This this instruction. Use the bil to extract the
-          destinations *)
-      let dests = match Target.lift mem insn with
-        | Error _ -> []
-        | Ok bil -> dests_of_bil bil in
-      let is = Disasm_expert.Basic.Insn.is insn in
-      let fall = Some next, `Fall in
-      let result =
-        match kind_of_dests dests with
-        | `Fall when is `Return -> []
-        | `Jump when is `Call -> fall :: dests
-        | `Cond | `Fall -> fall :: dests
-        | _ -> dests in
-      default_print_result mem result;
-      result
 
 let register_brancher_source () =
   let source =
