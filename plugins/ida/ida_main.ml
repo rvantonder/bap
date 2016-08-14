@@ -254,21 +254,6 @@ let register_source (module T : Target) =
     Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
 
-let register_symbolizer_source () =
-  let source =
-    let open Project.Info in
-    let extract file arch = Or_error.try_with (fun () ->
-        let s' = Symbolizer.create (fun addr ->
-            if addr = (Word.of_int ~width:32 0x10F28) then
-              Some "Look_ma"
-            else
-              None) in
-        let default =
-          extract file arch |> Symbolizer.of_blocks in
-        Symbolizer.chain [s';default]) in
-    Stream.merge file arch ~f:extract in
-  Symbolizer.Factory.register name source
-
 type perm = [`code | `data] [@@deriving sexp]
 type section = string * perm * int * (int64 * int)
   [@@deriving sexp]
@@ -415,7 +400,7 @@ let checked ida_path is_headless =
 let main () =
   register_source (module Rooter); (* TODO fix extern symbols *)
   (*register_source (module Symbolizer);*)
-  register_symbolizer_source (); (* add virtual symbols of ko *)
+  register_source (module Symbolizer); (* add virtual symbols of ko *)
   register_source (module Reconstructor);
   (* NEED LOOKUP *)
   register_brancher_source ();
