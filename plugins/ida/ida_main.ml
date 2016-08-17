@@ -449,9 +449,10 @@ let main () =
   Project.Input.register_loader name loader;
   (* need to launch register pass after things. get the file path from
      stream, send to relocs, win *)
-  Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
+  (* Can also Stream.watch... *)
+  Stream.merge Project.Info.file lookup_stream ~f:(fun file lookup ->
       Or_error.try_with (fun () ->
-          let lookup = Ida.with_file file brancher_command in
+          (*let lookup = Ida.with_file file brancher_command in*)
           let relocs = get_relocs file lookup in
           Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
               Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
