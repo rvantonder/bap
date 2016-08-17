@@ -212,6 +212,7 @@ let register_brancher_source lookup_stream =
             Brancher.create (branch_lookup arch lookup))) in
   Brancher.Factory.register name source
 
+
 let symbolizer_command =
   let script =
     {|
@@ -310,6 +311,30 @@ let get_relocs lookup =
       | Some dest -> (!addr,!dest)::acc
       | None -> acc)
 
+(* Doesn't work, have to wait on symtab *)
+(*
+let register_reconstructor_source reloc_lookup =
+  let source =
+    let open Project.Info in
+    Stream.merge reloc_lookup Project.Info.symtab ~f:(fun lookup symtab ->
+        printf "WHY NO CALLBACK\n%!";
+        Or_error.try_with (fun () ->
+            printf "ACTIVATE KOMAPPER\n%!";
+            let relocs = get_relocs lookup in
+            let symtab' = Ida_komapper.main symtab relocs in
+            Reconstructor.create (fun _ -> symtab'))) in
+  Reconstructor.Factory.register name source*)
+
+let register_reconstructor_source reloc_lookup =
+  let recon_stream,got_recon = Stream.create () in
+  Stream.watch reloc_lookup (fun _ look -> Stream.watch Project.Info.symtab (fun _ symtab ->
+      printf "Fuck this!\n%!";
+      let relocs = get_relocs look in
+      let symtab' = Ida_komapper.main symtab relocs in
+      let reconstr =  Ok (Reconstructor.create (fun _ -> symtab')) in
+      (* Nasty, i just overwrote it dynamically, methinks *)
+      Signal.send got_recon reconstr))
+
 (* NEEDS lookup *)
 let tag_branches_of_mem_extern memmap path lookup =
   (*let lookup = branch_lookup_of_file "/tmp/noot" in*)
@@ -407,7 +432,6 @@ type reloc_lookup = (int64 * int64 option * int64 list) list
 let main () =
   register_source (module Rooter);
   register_source (module Symbolizer);
-  register_source (module Reconstructor);
 
   (** Wrap lookup in a stream, for reuse. We depend on file to run
       lookup. When file is available, call Ida only once for brancher
@@ -415,25 +439,62 @@ let main () =
       after everything is built, to remap jumps that should point to
       extern *)
   (** XXX make it Stream.watch *)
-  let lookup_stream : reloc_lookup stream =
-    let lookup_stream,signal = Stream.create () in
+  let reloc_lookup : reloc_lookup stream =
+    let reloc_lookup,got_lookup = Stream.create () in
     Stream.watch Project.Info.file (fun _ file ->
         printf "ACTIVATED XXX!\n%!";
-        Signal.send signal (Ida.with_file file brancher_command));
-    lookup_stream in
+        Signal.send got_lookup (Ida.with_file file brancher_command));
+    reloc_lookup in
 
   (** register_brancher needs the reloc_lookup to create a new brancher *)
-  register_brancher_source lookup_stream;
+  register_brancher_source reloc_lookup;
 
+  register_reconstructor_source reloc_lookup;
+
+  (*Stream.watch Project.Info.symtab (fun _ _ -> printf "1. I see a symtab\n%!");
+    Stream.watch reloc_lookup (fun _ _ -> printf "2. I see reloc lookup\n%!");*)
+
+  (*let recon_stream,got_recon = Stream.create () in*)
+
+  (* Debug for creating fake reconstructor *)
+  (**
+     Stream.watch reloc_lookup (fun _ look -> Stream.watch Project.Info.symtab (fun _ symtab ->
+      printf "Fuck this!\n%!";
+      let relocs = get_relocs look in
+      let symtab' = Ida_komapper.main symtab relocs in
+      let reconstr =  Ok (Reconstructor.create (fun _ -> symtab')) in
+      Signal.send got_recon reconstr;
+      (*Reconstructor.Factory.register name recon_stream;*)
+     ));
+  *)
+
+        (*
+        let reconstr =
+        printf "SET up the asdf\n%!";
+        Stream.merge reloc_lookup Project.Info.symtab ~f:(fun lookup symtab ->
+        printf "WHY NO CALLBACK\n%!";
+        Or_error.try_with (fun () ->
+            printf "ACTIVATE KOMAPPER\n%!";
+            let relocs = get_relocs lookup in
+            let symtab' = Ida_komapper.main symtab relocs in
+            Reconstructor.create (fun _ -> symtab'))) in
+       *)
+
+
+
+  (** We create a pair out of thin air. But we will coerce the type of
+      send to recon stream, and so all listeners will see it. how?
+      send wraps reconstr in a stream when we send it*)
+  (** fake reconstructor for debug *)
+
+  (*let xrecon_stream,xgot_recon = Stream.create () in
+    let xreconstr =  Ok (Reconstructor.create (fun _ -> Symtab.empty)) in
+    Signal.send xgot_recon xreconstr;
+    Reconstructor.Factory.register "fake" xrecon_stream;*)
+
+  (*register_source (module Reconstructor);*)
   (** we must register the loader before registering the pass *)
-  Project.Input.register_loader name loader;
-
-  (** Test with Stream.watch instead of merge *)
-  Stream.merge Project.Info.file lookup_stream ~f:(fun _ lookup ->
-      Or_error.try_with (fun () ->
-          let relocs = get_relocs lookup in
-          Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
-              Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
+  Project.Input.register_loader name loader
 
 let () =
   let () = Config.manpage [
