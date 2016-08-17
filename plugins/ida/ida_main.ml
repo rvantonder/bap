@@ -184,10 +184,10 @@ let resolve_dests memory insn lookup arch =
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
-let branch_lookup arch lookup =
-  (*let lookup = Ida.with_file path brancher_command in*)
+let branch_lookup arch path =
   let open Bil in
   (*let lookup = branch_lookup_of_file "/tmp/noot" in *)
+  let lookup = Ida.with_file path brancher_command in
   match lookup with
   | [] ->
     warning "didn't find any branches";
@@ -201,17 +201,17 @@ let branch_lookup arch lookup =
       | Some dests -> dests
 
 (* NEED LOOKUP *)
-let register_brancher_source lookup_stream =
+let register_brancher_source () =
   let source =
     let open Project.Info in
     let open Option in
-    Stream.merge lookup_stream arch ~f:(fun lookup arch ->
-        printf "ACTIVATED YYY!\n%!";
+    Stream.merge file arch ~f:(fun file arch ->
         (*let default_brancher = Bap_disasm_brancher.of_bil arch in*)
         Or_error.try_with (fun () ->
-            Brancher.create (branch_lookup arch lookup))) in
+            (* NEED LOOKUP. which NEEDS file path (string from
+                Project.Info.file stream) *)
+            Brancher.create (branch_lookup arch file))) in
   Brancher.Factory.register name source
-
 
 let symbolizer_command =
   let script =
@@ -304,36 +304,12 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
-let get_relocs lookup =
+let get_relocs file lookup =
   let (!) = Word.of_int64 ~width:32 in
   List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
       match List.hd l with
       | Some dest -> (!addr,!dest)::acc
       | None -> acc)
-
-(* Doesn't work, have to wait on symtab *)
-(*
-let register_reconstructor_source reloc_lookup =
-  let source =
-    let open Project.Info in
-    Stream.merge reloc_lookup Project.Info.symtab ~f:(fun lookup symtab ->
-        printf "WHY NO CALLBACK\n%!";
-        Or_error.try_with (fun () ->
-            printf "ACTIVATE KOMAPPER\n%!";
-            let relocs = get_relocs lookup in
-            let symtab' = Ida_komapper.main symtab relocs in
-            Reconstructor.create (fun _ -> symtab'))) in
-  Reconstructor.Factory.register name source*)
-
-let register_reconstructor_source reloc_lookup =
-  let recon_stream,got_recon = Stream.create () in
-  Stream.watch reloc_lookup (fun _ look -> Stream.watch Project.Info.symtab (fun _ symtab ->
-      printf "Fuck this!\n%!";
-      let relocs = get_relocs look in
-      let symtab' = Ida_komapper.main symtab relocs in
-      let reconstr =  Ok (Reconstructor.create (fun _ -> symtab')) in
-      (* Nasty, i just overwrote it dynamically, methinks *)
-      Signal.send got_recon reconstr))
 
 (* NEEDS lookup *)
 let tag_branches_of_mem_extern memmap path lookup =
@@ -378,6 +354,7 @@ let loader path =
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
   let endian = Arch.endian arch in
+  let lookup = Ida.with_file path brancher_command in
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
@@ -393,12 +370,14 @@ let loader path =
             | _,"extern" ->
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
-              (* annotate insns that branch to extern. annotate in proj *)
-              (*let code' = tag_branches_of_mem_extern code' path lookup in*)
+              (* annotate insns that branch to extern *)
+              let code' = tag_branches_of_mem_extern code' path lookup in
               code',data
             | _ -> code, Memmap.add data mem sec) in
   (* register remapper pass here, where we have relocs *)
-  Project.Input.create arch path ~code ~data
+  let res =
+    Project.Input.create arch path ~code ~data in
+  res
 
 
 let require req check =
@@ -427,74 +406,30 @@ let checked ida_path is_headless =
        (ida_path/"plugins"/"plugin_loader_bap.py"))  >>| fun () ->
   ida_path
 
-type reloc_lookup = (int64 * int64 option * int64 list) list
 
 let main () =
-  register_source (module Rooter);
-  register_source (module Symbolizer);
-
-  (** Wrap lookup in a stream, for reuse. We depend on file to run
-      lookup. When file is available, call Ida only once for brancher
-      info. We want to reuse lookup in brancher and inside project
-      after everything is built, to remap jumps that should point to
-      extern *)
-  (** XXX make it Stream.watch *)
-  let reloc_lookup : reloc_lookup stream =
-    let reloc_lookup,got_lookup = Stream.create () in
-    Stream.watch Project.Info.file (fun _ file ->
-        printf "ACTIVATED XXX!\n%!";
-        Signal.send got_lookup (Ida.with_file file brancher_command));
-    reloc_lookup in
-
-  (** register_brancher needs the reloc_lookup to create a new brancher *)
-  register_brancher_source reloc_lookup;
-
-  register_reconstructor_source reloc_lookup;
-
-  (*Stream.watch Project.Info.symtab (fun _ _ -> printf "1. I see a symtab\n%!");
-    Stream.watch reloc_lookup (fun _ _ -> printf "2. I see reloc lookup\n%!");*)
-
-  (*let recon_stream,got_recon = Stream.create () in*)
-
-  (* Debug for creating fake reconstructor *)
-  (**
-     Stream.watch reloc_lookup (fun _ look -> Stream.watch Project.Info.symtab (fun _ symtab ->
-      printf "Fuck this!\n%!";
-      let relocs = get_relocs look in
-      let symtab' = Ida_komapper.main symtab relocs in
-      let reconstr =  Ok (Reconstructor.create (fun _ -> symtab')) in
-      Signal.send got_recon reconstr;
-      (*Reconstructor.Factory.register name recon_stream;*)
-     ));
+  register_source (module Rooter); (* TODO fix extern symbols *)
+  (*register_source (module Symbolizer);*)
+  register_source (module Symbolizer); (* add virtual symbols of ko *)
+  register_source (module Reconstructor);
+  (* NEED LOOKUP *)
+  register_brancher_source ();
+  (* NEEDS lookup *)
+  (* Now a loader is in the bap ecosystem. how does BAP use it to
+     create project? Somewhere it uses Input with the data/code info
+     to create it. where? Through create/create_exn. when does that happen?
+     Things must go through create_exn.  -> means has to go through create.
+     IS called in bap/src/bap_main.ml
   *)
-
-        (*
-        let reconstr =
-        printf "SET up the asdf\n%!";
-        Stream.merge reloc_lookup Project.Info.symtab ~f:(fun lookup symtab ->
-        printf "WHY NO CALLBACK\n%!";
-        Or_error.try_with (fun () ->
-            printf "ACTIVATE KOMAPPER\n%!";
-            let relocs = get_relocs lookup in
-            let symtab' = Ida_komapper.main symtab relocs in
-            Reconstructor.create (fun _ -> symtab'))) in
-       *)
-
-
-
-  (** We create a pair out of thin air. But we will coerce the type of
-      send to recon stream, and so all listeners will see it. how?
-      send wraps reconstr in a stream when we send it*)
-  (** fake reconstructor for debug *)
-
-  (*let xrecon_stream,xgot_recon = Stream.create () in
-    let xreconstr =  Ok (Reconstructor.create (fun _ -> Symtab.empty)) in
-    Signal.send xgot_recon xreconstr;
-    Reconstructor.Factory.register "fake" xrecon_stream;*)
-
-  (*register_source (module Reconstructor);*)
-  (** we must register the loader before registering the pass *)
-  Project.Input.register_loader name loader
+  Project.Input.register_loader name loader;
+  (* need to launch register pass after things. get the file path from
+     stream, send to relocs, win *)
+  Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
+      Or_error.try_with (fun () ->
+          let lookup = Ida.with_file file brancher_command in
+          let relocs = get_relocs file lookup in
+          Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
+              Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
 
 let () =
   let () = Config.manpage [
