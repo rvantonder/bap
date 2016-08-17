@@ -186,7 +186,6 @@ let resolve_dests memory insn lookup arch =
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
 let branch_lookup arch path =
   let open Bil in
-  let module Target = (val target_of_arch arch) in
   (*let lookup = branch_lookup_of_file "/tmp/noot" in *)
   let lookup = Ida.with_file path brancher_command in
   match lookup with
@@ -305,10 +304,16 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
+let get_relocs file lookup =
+  let (!) = Word.of_int64 ~width:32 in
+  List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
+      match List.hd l with
+      | Some dest -> (!addr,!dest)::acc
+      | None -> acc)
+
 (* NEEDS lookup *)
-let tag_branches_of_mem_extern memmap path =
+let tag_branches_of_mem_extern memmap path lookup =
   (*let lookup = branch_lookup_of_file "/tmp/noot" in*)
-  let lookup = Ida.with_file path brancher_command in
   let (!) = Word.of_int64 ~width:32 in
   let (!@) x =
     let open Or_error in
@@ -349,6 +354,7 @@ let loader path =
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
   let endian = Arch.endian arch in
+  let lookup = Ida.with_file path brancher_command in
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
@@ -365,10 +371,14 @@ let loader path =
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               (* annotate insns that branch to extern *)
-              let code' = tag_branches_of_mem_extern code' path in
+              let code' = tag_branches_of_mem_extern code' path lookup in
               code',data
             | _ -> code, Memmap.add data mem sec) in
-  Project.Input.create arch path ~code ~data
+  (* register remapper pass here, where we have relocs *)
+  let res =
+    Project.Input.create arch path ~code ~data in
+  res
+
 
 let require req check =
   if check
@@ -405,7 +415,21 @@ let main () =
   (* NEED LOOKUP *)
   register_brancher_source ();
   (* NEEDS lookup *)
-  Project.Input.register_loader name loader
+  (* Now a loader is in the bap ecosystem. how does BAP use it to
+     create project? Somewhere it uses Input with the data/code info
+     to create it. where? Through create/create_exn. when does that happen?
+     Things must go through create_exn.  -> means has to go through create.
+     IS called in bap/src/bap_main.ml
+  *)
+  Project.Input.register_loader name loader;
+  (* need to launch register pass after things. get the file path from
+     stream, send to relocs, win *)
+  Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
+      Or_error.try_with (fun () ->
+          let lookup = Ida.with_file file brancher_command in
+          let relocs = get_relocs file lookup in
+          Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
+              Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
 
 let () =
   let () = Config.manpage [
