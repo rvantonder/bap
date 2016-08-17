@@ -200,34 +200,15 @@ let branch_lookup arch lookup =
       | None -> []
       | Some dests -> dests
 
-let wait_fulfill future promise =
-  printf "Wait fulfill loop\n%!";
-  let rec loop () =
-    match Promise.is_fulfilled promise with
-    | false ->
-      loop ()
-    | true ->
-      match Future.peek future with
-      | Some x ->
-        x
-      | None ->
-        loop () in
-  loop ()
-
-
 (* NEED LOOKUP *)
-let register_brancher_source lookup_stream lookup_promise lookup_future =
+let register_brancher_source lookup_stream =
   let source =
     let open Project.Info in
     let open Option in
     Stream.merge lookup_stream arch ~f:(fun lookup arch ->
         printf "ACTIVATED YYY!\n%!";
         (*let default_brancher = Bap_disasm_brancher.of_bil arch in*)
-        printf "Wait fulfill brancher\n%!";
-        (*let lookup = wait_fulfill lookup_future lookup_promise in*)
         Or_error.try_with (fun () ->
-            (* NEED LOOKUP. which NEEDS file path (string from
-                Project.Info.file stream) *)
             Brancher.create (branch_lookup arch lookup))) in
   Brancher.Factory.register name source
 
@@ -322,7 +303,7 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
-let get_relocs file lookup =
+let get_relocs lookup =
   let (!) = Word.of_int64 ~width:32 in
   List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
       match List.hd l with
@@ -421,39 +402,36 @@ let checked ida_path is_headless =
        (ida_path/"plugins"/"plugin_loader_bap.py"))  >>| fun () ->
   ida_path
 
+type reloc_lookup = (int64 * int64 option * int64 list) list
 
 let main () =
   register_source (module Rooter);
   register_source (module Symbolizer);
   register_source (module Reconstructor);
 
-  let lookup_future,lookup_promise = Future.create () in
-
-  (** fulfill the promise. send the callback to register_brancher_source
-      and loader *)
-
-  let lookup_stream =
-    Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
+  (** Wrap lookup in a stream, for reuse. We depend on file to run
+      lookup. When file is available, call Ida only once for brancher
+      info. We want to reuse lookup in brancher and inside project
+      after everything is built, to remap jumps that should point to
+      extern *)
+  (** XXX make it Stream.watch *)
+  let lookup_stream : reloc_lookup stream =
+    let lookup_stream,signal = Stream.create () in
+    Stream.watch Project.Info.file (fun _ file ->
         printf "ACTIVATED XXX!\n%!";
-        let lookup = Ida.with_file file brancher_command in
-        lookup) in
+        Signal.send signal (Ida.with_file file brancher_command));
+    lookup_stream in
 
-  register_brancher_source lookup_stream lookup_promise lookup_future;
-  (* NEEDS lookup *)
-  (* Now a loader is in the bap ecosystem. how does BAP use it to
-     create project? Somewhere it uses Input with the data/code info
-     to create it. where? Through create/create_exn. when does that happen?
-     Things must go through create_exn.  -> means has to go through create.
-     IS called in bap/src/bap_main.ml
-  *)
+  (** register_brancher needs the reloc_lookup to create a new brancher *)
+  register_brancher_source lookup_stream;
+
+  (** we must register the loader before registering the pass *)
   Project.Input.register_loader name loader;
-  (* need to launch register pass after things. get the file path from
-     stream, send to relocs, win *)
-  (* Can also Stream.watch... *)
-  Stream.merge Project.Info.file lookup_stream ~f:(fun file lookup ->
+
+  (** Test with Stream.watch instead of merge *)
+  Stream.merge Project.Info.file lookup_stream ~f:(fun _ lookup ->
       Or_error.try_with (fun () ->
-          (*let lookup = Ida.with_file file brancher_command in*)
-          let relocs = get_relocs file lookup in
+          let relocs = get_relocs lookup in
           Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
               Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
 
