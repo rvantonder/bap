@@ -84,61 +84,38 @@ and merge_branches yes no =
   let kind = kind_of_branches x y in
   List.(rev_append x y >>| fun (a,_) -> a,kind)
 
-let handle_normal_flow needle =
+let handle_normal_flow =
   let (!) = Word.of_int64 ~width:32 in
   function
-  | Some fall ->
-    (*printf "Addr: %a -> %a. %a : assuming fallthrough edge\n%!"
-      Addr.pp !needle
-      Addr.pp !fall
-      Addr.pp !fall;*)
-    [Some !fall, `Fall]
+  | Some fall -> [Some !fall, `Fall]
   | None -> []
 
+(** We have to figure out what the kind is of the other jumps. We use
+    the default Bil brancher: if it has a destination that matches one of
+    ours, then we just use that edge type. If not, we just use jump *)
 let handle_other_flow default rest =
   let (!) = Word.of_int64 ~width:32 in
   match rest with
   | [] -> []
   | l ->
-    (**Here, do: Use default to decide. do a lookup. fail hard if
-       we couldn't determinte based on bil. *)
-    (*List.iter l ~f:(fun x -> printf "Have not decided yet on: %a\n"
-                       Addr.pp !x);*)
-    (* DECIDE based on default BIL *)
     List.fold l ~init:[] ~f:(fun acc dest_addr ->
-        (* default contains this addr and knows what kind it is.
-           basically, the default output. *)
         match List.find default ~f:(fun (addr,_) -> addr = Some !dest_addr) with
-        (* If the IDA address is in the BIL address, take the same kind*)
-        | Some (Some addr,kind) ->
-          (*printf "\tFor %a taking BIL type: %s\n"
-            Addr.pp addr
-            (Sexp.to_string (sexp_of_edge kind));*)
-          (Some !dest_addr, kind)::acc
-        | _ ->
-          (** Two things to do:
-              1) the symbol may be in a synthetic section
-              2) the symbol may be to something that default brancher couldn't
-              figure out (indirect jump) *)
-          (** XXX In all cases just, *assume* jump *)
-          (*printf "\tSmarter IDA knows about %a, but we don't have \
-                  default semantics in lookup table.\n" Addr.pp
-            !dest_addr;*)
-          (*printf "\tBut we're going to make %a a Jump!\n%!"
-            Addr.pp !dest_addr;*)
-          (Some !dest_addr, `Jump)::acc) (* heuristic *)
+        (* If the IDA dest addr is in the default BIL brancher, use same edge *)
+        | Some (Some addr,kind) -> (Some !dest_addr, kind)::acc
+        (* XXX heuristic: we are assuming `Jump always (when it could be cond) *)
+        | _ -> (Some !dest_addr, `Jump)::acc)
 
+(** Given a piece of memory and an insn, return a list of destination
+    addrs, and the kind of edge, from this insn. Format:
+    (addr option * [ `Cond | `Fall | `Jump ]) list *)
 let resolve_dests memory insn lookup arch =
   let open Option in
   let module Target = (val target_of_arch arch) in
-  (*let (!) = Word.of_int64 ~width:32 in*)
-  (*printf "Memory is: %a\n%!" Memory.pp memory;*)
-  addr_of_mem memory >>= fun needle ->
-  (*printf "Lookup is: %a\n" Addr.pp !needle;*)
-  (** Only process further if this addr is in our lookup*)
-  List.find lookup ~f:(fun (addr,_,_) -> needle = addr) >>=
-
-  (* dests is addr option * edge list *)
+  addr_of_mem memory >>= fun addr ->
+  (* Only process further if this addr is in our lookup: i.e. we know
+     that we have branch information for it. *)
+  List.find lookup ~f:(fun (needle,_,_) -> needle = addr) >>=
+  (* provide the default information to help with other_flow *)
   let default =
     let next = Addr.succ (Memory.max_addr memory) in
     let dests = match Target.lift memory insn with
@@ -146,70 +123,39 @@ let resolve_dests memory insn lookup arch =
       | Ok bil -> dests_of_bil bil in
     let is = Disasm_expert.Basic.Insn.is insn in
     let fall = Some next, `Fall in
-    let result =
-      match kind_of_dests dests with
-      | `Fall when is `Return ->
-        (*printf "Default says: This is a return thing\n%!";*)
-        []
-      | `Jump when is `Call ->
-        fall :: dests
-      | `Cond | `Fall ->
-        fall :: dests
-      | `Jump ->
-        (*printf
-          "Default says: some `Jump, but not adding it to dests. We\
-           only do that for calls.\n%!";*)
-        dests in
-    result in
-
+    match kind_of_dests dests with
+    | `Fall when is `Return -> []
+    | `Jump when is `Call -> fall :: dests
+    | `Cond | `Fall -> fall :: dests
+    | `Jump -> dests
+  in
   fun (_,opt,(rest : int64 list)) ->
-    (*printf "Processing %a\n" Addr.pp !needle;*)
-    (** Result for default brancher: *)
-    (** We want only the semantics of the branch instruction. Ida
-        guarantees us that there is a branch, but we don't know if it's cond
-        or jump. unfortunately ivan coded this retardedly so it's not easy to
-        get the kind separately. *)
-    (*List.iter default ~f:(fun (addr,kind) ->
-        match addr with
-        | Some addr ->
-          printf "Default: %a : %s\n%!" Addr.pp
-            addr (Sexp.to_string (sexp_of_edge kind))
-        | None -> ());*)
-    let normal_flow = handle_normal_flow needle opt in
+    let normal_flow = handle_normal_flow opt in
     let other_flow = handle_other_flow default rest in
-    other_flow@normal_flow |> fun res ->
-    return res
-(* Problem: not asking for memory address, eg 23d0, because it is not
-   being guided properly. was breaking at 2108. *)
+    other_flow@normal_flow |> return
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
 let branch_lookup arch path =
+  printf "2.\n%!";
   let open Bil in
-  (*let lookup = branch_lookup_of_file "/tmp/noot" in *)
   let lookup = Ida.with_file path brancher_command in
   match lookup with
   | [] ->
     warning "didn't find any branches";
     info "this plugin doesn't work with IDA free";
     fun mem insn -> []
-  | lookup ->
-    fun mem insn ->
-      (*printf "\nChecking lookup for %a\n" Memory.pp mem;*)
-      match resolve_dests mem insn lookup arch with
-      | None -> []
-      | Some dests -> dests
+  | lookup -> fun mem insn ->
+    match resolve_dests mem insn lookup arch with
+    | None -> []
+    | Some dests -> dests
 
-(* NEED LOOKUP *)
 let register_brancher_source () =
   let source =
     let open Project.Info in
     let open Option in
     Stream.merge file arch ~f:(fun file arch ->
-        (*let default_brancher = Bap_disasm_brancher.of_bil arch in*)
         Or_error.try_with (fun () ->
-            (* NEED LOOKUP. which NEEDS file path (string from
-                Project.Info.file stream) *)
             Brancher.create (branch_lookup arch file))) in
   Brancher.Factory.register name source
 
@@ -311,9 +257,7 @@ let get_relocs lookup =
       | Some dest -> (!addr,!dest)::acc
       | None -> acc)
 
-(* NEEDS lookup *)
 let tag_branches_of_mem_extern memmap path lookup =
-  (*let lookup = branch_lookup_of_file "/tmp/noot" in*)
   let (!) = Word.of_int64 ~width:32 in
   let (!@) x =
     let open Or_error in
@@ -340,8 +284,8 @@ let create_mem pos len endian beg bits size =
     Memory.create ~pos:0 ~len endian (addr beg) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
-(* NEEDS lookup. It gets path automatically *)
 let loader path =
+  printf "1.\n%!";
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
       (Digest.file path) in
   let (proc,size,sections) =
@@ -354,7 +298,6 @@ let loader path =
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
   let endian = Arch.endian arch in
-  let lookup = Ida.with_file path brancher_command in
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
@@ -371,7 +314,6 @@ let loader path =
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               (* annotate insns that branch to extern *)
-              let code' = tag_branches_of_mem_extern code' path lookup in
               code',data
             | _ -> code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
@@ -408,8 +350,6 @@ let main () =
   register_source (module Rooter);
   register_source (module Symbolizer);
   register_source (module Reconstructor);
-
-  (* NEED LOOKUP *)
   register_brancher_source ();
 
   Project.Input.register_loader name loader;
@@ -417,9 +357,6 @@ let main () =
   Project.register_pass
     ~autorun:true ~name:"komapper" (fun proj ->
         let file = Project.get proj filename |> Option.value_exn in
-        (*Image.filename (* has to be some way to get image *)*)
-        (*let file = "/home/vagrant/usbcore.ko" in*)
-        (*let file = "/home/vagrant/usbcore.ko" in*)
         let lookup = Ida.with_file file brancher_command in
         let relocs = get_relocs lookup in
         Ida_komapper.main proj relocs)
