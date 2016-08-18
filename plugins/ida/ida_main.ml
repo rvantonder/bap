@@ -9,20 +9,30 @@ open Result.Monad_infix
 
 include Self()
 
-module Symbols = Data.Make(struct
-    type t = (string * int64 * int64) list
-    let version = "0.1"
-  end)
+module Symbols = struct
+  include Data.Make(struct
+      type t = (string * int64 * int64) list
+      let version = "0.1"
+    end)
+  type t = (string * int64 * int64) list
+end
 
-module Brancher_info = Data.Make(struct
-    type t = (int64 * int64 option * int64 list) list
-    let version = "0.1"
-  end)
+module Brancher_info = struct
+  include Data.Make(struct
+      type t = (int64 * int64 option * int64 list) list
+      let version = "0.1"
+    end)
+  type t = (int64 * int64 option * int64 list) list
+end
 
-type ('a,'b,'c) ida_info_futures =
-  {symbols : 'a future * 'a promise;
-   brancher : 'b future * 'b promise;
-   img : 'c future * 'c promise}
+module Ida_futures = struct
+  type ('a,'b,'c) t =
+    {symbols : 'a future * 'a promise;
+     brancher : 'b future * 'b promise;
+     img : 'c future * 'c promise} [@@ deriving fields]
+end
+
+open Ida_futures
 
 (* XXX needs fixing *)
 let read_future future =
@@ -225,10 +235,20 @@ type section = string * perm * int * (int64 * int)
 
 type image = string * addr_size * section list [@@deriving sexp]
 
-module Img = Data.Make(struct
-    type t = image
-    let version = "0.1"
-  end)
+
+module Img = struct
+  include Data.Make(struct
+      type t = image
+      let version = "0.1"
+    end)
+  type t = image
+end
+
+(** When we use Data.Make, it performs destructive type sbustitiution
+    on t to produce the module. So when I pass the module, it doesn't
+    see t any more. But that means if we include it in another module,
+    it won't have a conflicting t. So just define the new t in a
+    wrapped module *)
 
 exception Unsupported_architecture of string
 
@@ -304,39 +324,32 @@ let create_mem pos len endian beg bits size =
     Memory.create ~pos:0 ~len endian (addr beg) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
-
-(** XXX Must be able to cope when caching is turned off! *)
-(** If caching is off, we will always send the info to the stream *)
-let preload_ida_info path (futures : ('a,'b,'c) ida_info_futures) =
+(** If caching is off, we will always send the info to the future *)
+let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
   (* preload loader info *)
-  let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
-  (match Img.Cache.load id with
-   | Some _ -> ()
-   | None ->
-     let img = Ida.with_file path load_image in
-     Img.Cache.save id img;
-     Promise.fulfill (snd futures.img) img);
-  (* preload symbols *)
-  let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
-  (match Symbols.Cache.load id with
-   | Some _ -> ()
-   | None -> match Ida.with_file path symbolizer_command with
-     | [] ->
-       warning "didn't find any symbols";
-       info "this plugin doesn't work with IDA Free"
-     | syms -> Symbols.Cache.save id syms;
-       Promise.fulfill (snd futures.symbols) syms);
-  (* preload brancher info *)
-  let id = Data.Cache.digest ~namespace:"ida-brancher" "%s"
-      (Digest.file path) in
-  (match Brancher_info.Cache.load id with
-   | Some _ -> ()
-   | None ->
-     let brancher_info = Ida.with_file path brancher_command in
-     Brancher_info.Cache.save id brancher_info;
-     Promise.fulfill (snd futures.brancher) brancher_info)
 
-let loader (futures : ('a,'b,'c) ida_info_futures) path =
+  let mk_id ~namespace =
+    Data.Cache.digest ~namespace "%s" (Digest.file path) in
+
+  let load_or_save ~namespace (type t) (module M : Data with type t = t)
+      field command =
+    let id = mk_id ~namespace in
+    match M.Cache.load id with
+    | Some _ -> ()
+    | None ->
+      let data = Ida.with_file path command in
+      M.Cache.save id data;
+      Promise.fulfill (snd (Field.get field futures)) data in
+
+  Ida_futures.Fields.iter
+    ~img:(fun field -> load_or_save ~namespace:"ida-loader"
+             (module Img) field load_image)
+    ~symbols:(fun field ->  load_or_save ~namespace:"ida"
+                 (module Symbols) field symbolizer_command)
+    ~brancher:(fun field -> load_or_save ~namespace:"ida-brancher"
+                  (module Brancher_info)  field brancher_command)
+
+let loader (futures : ('a,'b,'c) Ida_futures.t) path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   preload_ida_info path futures;
   let (proc,size,sections) =
