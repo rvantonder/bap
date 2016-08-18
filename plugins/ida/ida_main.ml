@@ -166,6 +166,7 @@ let get_relocs lookup =
       | Some dest -> (!addr,!dest)::acc
       | None -> acc)
 
+(* XXX only for arm *)
 let tag_branches_of_mem_extern memmap path lookup =
   let (!) = Word.of_int64 ~width:32 in
   let (!@) x =
@@ -298,21 +299,20 @@ let main () =
   register_brancher_source futures;
 
   Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
-      let file = match Future.peek path with
-        | Some path -> path
-        (* XXX change to warn and skip *)
-        | None -> failwith "Komapper pass cannot continue: no file path specified."
-      in
-      let id = Data.Cache.digest ~namespace:"ida-brancher"
-          "%s" (Digest.file file) in
-      let lookup = match Brancher_info.Cache.load id with
-        | Some lookup -> lookup
-        | None ->
-          info "No caching enabled, using futures!";
-          read_future (fst futures.brancher)
-      in
-      let relocs = get_relocs lookup in
-      Ida_komapper.main proj relocs)
+      match Future.peek path with
+      | Some file when String.is_suffix file ".ko" ->
+        let id = Data.Cache.digest ~namespace:"ida-brancher"
+            "%s" (Digest.file file) in
+        let lookup = match Brancher_info.Cache.load id with
+          | Some lookup -> lookup
+          | None ->
+            info "No caching enabled, using futures!";
+            read_future (fst futures.brancher) in
+        let relocs = get_relocs lookup in
+        Ida_komapper.main proj relocs
+      | Some _ -> proj (* XXX ignore if there's no .ko extension *)
+      | None -> warning "Komapper pass cannot continue: no file path specified.";
+        proj)
 
 let () =
   let () = Config.manpage [
