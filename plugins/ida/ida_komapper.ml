@@ -5,6 +5,20 @@ open Format
 open Regular.Std
 open Graphlib.Std
 
+(* DEPRECATED *)
+(*
+let relocs_of_mem proj =
+  let open Option in
+  let mem = Project.memory proj in
+  Memmap.to_sequence mem |> Seq.fold ~init:[] ~f:(fun acc (mem',tag) ->
+      (Value.get comment tag >>= fun s ->
+       Memory.min_addr mem' |> fun w ->
+       let x = Int.of_string s |> Word.of_int ~width:32 in
+       return [(w,x)])
+      |> Option.value ~default:[]
+      |> fun r -> r@acc)
+*)
+
 let map_pc_to_dest w relocs =
   let open Option in
   List.find_map relocs ~f:(fun (pc,dest) -> some_if (w = pc) dest)
@@ -101,15 +115,7 @@ let remap cfg relocs arch =
 
 let main proj relocs =
   let open Option in
-  (*let mem = Project.memory proj in*)
-  (*let relocs =
-    Memmap.to_sequence mem |> Seq.fold ~init:[] ~f:(fun acc (mem',tag) ->
-        (Value.get comment tag >>= fun s ->
-         Memory.min_addr mem' |> fun w ->
-         let x = Int.of_string s |> Word.of_int ~width:32 in
-         return [(w,x)])
-        |> Option.value ~default:[]
-        |> fun r -> r@acc) in*)
+
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in
   (* Build a new symtab and just change cfg after mapping >:) *)
@@ -119,5 +125,3 @@ let main proj relocs =
         let cfg' = remap fn_cfg relocs (Project.arch proj) in
         Symtab.add_symbol acc (fn_name,fn_start_block,cfg')) in
   Program.lift symtab' |> Project.with_program proj
-
-(*let () = Project.register_pass main*)
