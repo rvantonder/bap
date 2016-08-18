@@ -67,23 +67,24 @@ let debug_bil_transform bil bil' =
   List.iter bil' ~f:(fun b -> printf ">> \t%a\n%!" Stmt.pp b);
   printf "-------------------------\n%!"
 
+let full_insn_of_mem mem arch =
+  Disasm_expert.Basic.with_disasm ~backend:"llvm" arch
+    ~f:(fun dis ->
+        let open Disasm_expert.Basic in
+        let dis = store_kinds dis in
+        let dis = store_asm dis in
+        insn_of_mem dis mem)
+
 let remap_block b memory arch relocs =
   let bil_remapper = new bil_ko_symbol_relocator relocs in
   let arch = Arch.to_string arch in
   (* We need a full_insn type to reconstruct an Insn with an updated
       bil. So re-disassemble from mem to get the full_insn type *)
-  let full_insn_of_mem mem =
-    Disasm_expert.Basic.with_disasm ~backend:"llvm" arch
-      ~f:(fun dis ->
-          let open Disasm_expert.Basic in
-          let dis = store_kinds dis in
-          let dis = store_asm dis in
-          insn_of_mem dis mem) in
   Block.insns b |> List.map ~f:(fun (mem,insn) ->
       let bil = Insn.bil insn in
       let bil' = bil_remapper#run bil in
       (*debug_bil_transform bil bil';*)
-      match full_insn_of_mem mem with
+      match full_insn_of_mem mem arch with
       | Ok (_,Some x,_) -> (mem,Insn.of_basic ~bil:bil' x)
       | _ -> (mem,insn))
   |> Block.create memory
@@ -111,17 +112,51 @@ end
 let remap cfg relocs arch =
   let cfg' = cfg in
   let visitor = new remap_cfg relocs arch in
-  Graphlib.depth_first_visit (module Graphs.Cfg) cfg ~init:cfg' visitor
+  Graphlib.depth_first_visit (module Graphs.Cfg) cfg ~init:cfg'
+    visitor
+
+let clean_extern name proj entry cfg arch =
+  let memmap = Project.memory proj in
+  Block.memory entry |>
+  Memmap.dominators memmap |>
+  Seq.find_map ~f:(fun (mem,tag) ->
+      match Value.get Image.section tag with
+      | Some "extern" ->
+        printf "%s in extern\n%!" name;
+        Some mem
+      | _ -> None) |> function
+  | Some mem ->
+    (* I need any instruction in a piece of memory which lifts
+       successfully *)
+    let s = Bigstring.of_string "\x00\x00\x00\x00" in
+    let mem' = match Memory.create LittleEndian (Memory.min_addr mem) s with
+      | Ok x -> x
+      | _ -> failwith "How could this possibly fail?" in
+    (match full_insn_of_mem mem' (Arch.to_string arch) with
+     | Ok (_,Some x,_) ->
+       printf "Success! %s\n%!" name;
+       let bil = [Bil.(Jmp (Unknown ("kernel_love",Imm 0)))] in
+       let nop_insn = Insn.of_basic ~bil x in
+       (* XXX use mem or mem'? *)
+       (* XXX add node to cfg? *)
+       (Block.create mem' [mem',nop_insn],Graphs.Cfg.empty)
+     | _ ->
+       warning "Failed to disassemble mem. Consider using empty memory";
+       entry,cfg)
+  | None -> entry,cfg
 
 let main proj relocs =
   let open Option in
-
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in
   (* Build a new symtab and just change cfg after mapping >:) *)
   let symtab' =
     Symtab.to_sequence symtab |>
     Seq.fold ~init:(Symtab.empty) ~f:(fun acc (fn_name,fn_start_block,fn_cfg) ->
+        (* first, perform relocation *)
         let cfg' = remap fn_cfg relocs (Project.arch proj) in
+        (* now make the function clean if it is in .extern *)
+        let fn_start,cfg' = clean_extern fn_name proj fn_start_block
+            cfg' (Project.arch proj) in
         Symtab.add_symbol acc (fn_name,fn_start_block,cfg')) in
   Program.lift symtab' |> Project.with_program proj
