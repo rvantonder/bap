@@ -310,7 +310,7 @@ let main () =
             read_future (fst futures.brancher) in
         let relocs = get_relocs lookup in
         Ida_komapper.main proj relocs
-      | Some _ -> proj (* XXX ignore if there's no .ko extension *)
+      | Some _ -> info "Komapper skipped: no .ko extension"; proj
       | None -> warning "Komapper pass cannot continue: no file path specified.";
         proj)
 
