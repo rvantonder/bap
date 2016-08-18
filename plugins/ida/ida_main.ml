@@ -435,12 +435,32 @@ let main () =
 
           ))) |> ignore;*)
 
-  let file = "/home/vagrant/usbcore.ko" in
-  let lookup = Ida.with_file file brancher_command in
-  let relocs = get_relocs lookup in
+  (* Requirement: register_pass must happen here, without any
+      shenangans inside stream. If it's in stream and waits for file,
+      then it fucks up (api doesn't work) *)
+
+
+
+  (* wrong_example1.txt *)
+  (*  Stream.watch
+      Project.Info.file (fun _ f ->
+          printf "Fuck you asshole %s\n%!" f;
+          Project.register_pass
+            ~autorun:true ~name:"komapper" (fun proj ->
+                let lookup = Ida.with_file f brancher_command in
+                let relocs = get_relocs lookup in
+                Ida_komapper.main proj relocs
+              ))*)
 
   Project.register_pass
-    ~autorun:true ~name:"komapper" (fun proj -> Ida_komapper.main proj relocs)
+    ~autorun:true ~name:"komapper" (fun proj ->
+        let file = Project.get proj filename |> Option.value_exn in
+        (*Image.filename (* has to be some way to get image *)*)
+        (*let file = "/home/vagrant/usbcore.ko" in*)
+        (*let file = "/home/vagrant/usbcore.ko" in*)
+        let lookup = Ida.with_file file brancher_command in
+        let relocs = get_relocs lookup in
+        Ida_komapper.main proj relocs)
 
 let () =
   let () = Config.manpage [
