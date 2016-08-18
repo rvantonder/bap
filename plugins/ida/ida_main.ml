@@ -19,6 +19,17 @@ module Brancher_info = Data.Make(struct
     let version = "0.1"
   end)
 
+type ('a,'b,'c) ida_info_futures =
+  {symbols : 'a future * 'a promise;
+   brancher : 'b future * 'b promise;
+   img : 'c future * 'c promise}
+
+(* XXX needs fixing *)
+let read_future future =
+  match Future.peek future with
+  | Some v -> v
+  | None -> failwith "Using futures failed: no value!\n"
+
 module type Target = sig
   type t
   val of_blocks : (string * addr * addr) seq -> t
@@ -141,14 +152,16 @@ let resolve_dests memory insn lookup arch =
 
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
-let branch_lookup arch path =
+let branch_lookup futures arch path =
   let open Bil in
   (*let lookup = Ida.with_file path brancher_command in*)
   let id = Data.Cache.digest ~namespace:"ida-brancher"
       "%s" (Digest.file path) in
   let lookup = match Brancher_info.Cache.load id with
     | Some lookup -> lookup
-    | None -> failwith "Preloading IDA info failed : brancher info!"
+    | None ->
+      info "No caching enabled, using futures!";
+      read_future (fst futures.brancher)
   in
   match lookup with
   | [] ->
@@ -160,13 +173,13 @@ let branch_lookup arch path =
     | None -> []
     | Some dests -> dests
 
-let register_brancher_source () =
+let register_brancher_source streams =
   let source =
     let open Project.Info in
     let open Option in
     Stream.merge file arch ~f:(fun file arch ->
         Or_error.try_with (fun () ->
-            Brancher.create (branch_lookup arch file))) in
+            Brancher.create (branch_lookup streams arch file))) in
   Brancher.Factory.register name source
 
 let symbolizer_command =
@@ -184,11 +197,14 @@ idc.Exit(0)
         In_channel.with_file name ~f:(fun ch ->
             Sexp.input_sexps ch |> List.map ~f:blk_of_sexp))
 
-let extract path arch =
+
+let extract futures path arch =
   let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
     | Some syms -> syms
-    | None -> failwith "Preloading IDA info failed : syms!" in
+    | None ->
+      info "No caching enabled, using streams!";
+      read_future (fst futures.symbols) in
   let size = Arch.addr_size arch in
   let width = Size.in_bits size in
   let addr = Addr.of_int64 ~width in
@@ -196,10 +212,10 @@ let extract path arch =
     List.map syms ~f:(fun (n,s,e) -> n, addr s, addr e) in
   Seq.of_list res
 
-let register_source (module T : Target) =
+let register_source streams (module T : Target) =
   let source =
     let extract file arch = Or_error.try_with (fun () ->
-        extract file arch |> T.of_blocks) in
+        extract streams file arch |> T.of_blocks) in
     Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
 
@@ -288,16 +304,18 @@ let create_mem pos len endian beg bits size =
     Memory.create ~pos:0 ~len endian (addr beg) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
+
 (** XXX Must be able to cope when caching is turned off! *)
-let preload_ida_info path =
+(** If caching is off, we will always send the info to the stream *)
+let preload_ida_info path (futures : ('a,'b,'c) ida_info_futures) =
   (* preload loader info *)
-  printf "preloading..\n%!";
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   (match Img.Cache.load id with
    | Some _ -> ()
    | None ->
      let img = Ida.with_file path load_image in
-     Img.Cache.save id img);
+     Img.Cache.save id img;
+     Promise.fulfill (snd futures.img) img);
   (* preload symbols *)
   let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   (match Symbols.Cache.load id with
@@ -306,7 +324,8 @@ let preload_ida_info path =
      | [] ->
        warning "didn't find any symbols";
        info "this plugin doesn't work with IDA Free"
-     | syms -> Symbols.Cache.save id syms);
+     | syms -> Symbols.Cache.save id syms;
+       Promise.fulfill (snd futures.symbols) syms);
   (* preload brancher info *)
   let id = Data.Cache.digest ~namespace:"ida-brancher" "%s"
       (Digest.file path) in
@@ -314,15 +333,18 @@ let preload_ida_info path =
    | Some _ -> ()
    | None ->
      let brancher_info = Ida.with_file path brancher_command in
-     Brancher_info.Cache.save id brancher_info)
+     Brancher_info.Cache.save id brancher_info;
+     Promise.fulfill (snd futures.brancher) brancher_info)
 
-let loader path =
+let loader (futures : ('a,'b,'c) ida_info_futures) path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
-  preload_ida_info path;
+  preload_ida_info path futures;
   let (proc,size,sections) =
     match Img.Cache.load id with
     | Some img -> img
-    | None -> failwith "Preloading IDA info failed : loader!"
+    | None ->
+      info "No caching enabled, using streams!";
+      read_future (fst futures.img)
   in
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
@@ -377,35 +399,40 @@ let checked ida_path is_headless =
 
 
 let main () =
-  (*let ida_symbols_info,got_ida_symbols_info = Stream.create () in
-    let ida_loader_info,got_ida_loader_info = Stream.create () in
-    let ida_brancher_info,got_ida_brancher_info = Stream.create () in*)
+  let ida_symbols_info,got_ida_symbols_info = Future.create () in
+  let ida_loader_info,got_ida_loader_info = Future.create () in
+  let ida_brancher_info,got_ida_brancher_info = Future.create () in
 
   (* We would like to get all the IDA information up front. One thing
      stops us: we don't know the binary path. The loader function is the
      first to get it, so let's process it all there, then send the
      streams to each module. (or we could put it in the cache *)
+
+  let futures =
+    {symbols = (ida_symbols_info, got_ida_symbols_info);
+     img = (ida_loader_info, got_ida_loader_info);
+     brancher = (ida_brancher_info,got_ida_brancher_info)} in
+
+  let loader = loader futures in
   Project.Input.register_loader name loader;
 
+  register_source futures (module Rooter);
+  register_source futures (module Symbolizer);
+  register_source futures (module Reconstructor);
+  register_brancher_source futures;
 
-  register_source (module Rooter);
-  register_source (module Symbolizer);
-  register_source (module Reconstructor);
-  register_brancher_source ();
-
-
-  Project.register_pass
-    ~autorun:true ~name:"komapper" (fun proj ->
-        let file = Project.get proj filename |> Option.value_exn in
-        (*let lookup = Ida.with_file file brancher_command in*)
-        let id = Data.Cache.digest ~namespace:"ida-brancher"
-            "%s" (Digest.file file) in
-        let lookup = match Brancher_info.Cache.load id with
-          | Some lookup -> lookup
-          | None -> failwith "Preloading IDA info failed : brancher info!"
-        in
-        let relocs = get_relocs lookup in
-        Ida_komapper.main proj relocs)
+  Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
+      let file = Project.get proj filename |> Option.value_exn in
+      let id = Data.Cache.digest ~namespace:"ida-brancher"
+          "%s" (Digest.file file) in
+      let lookup = match Brancher_info.Cache.load id with
+        | Some lookup -> lookup
+        | None ->
+          info "No caching enabled, using futures!";
+          read_future (fst futures.brancher)
+      in
+      let relocs = get_relocs lookup in
+      Ida_komapper.main proj relocs)
 
 let () =
   let () = Config.manpage [
