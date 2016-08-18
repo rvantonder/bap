@@ -14,6 +14,11 @@ module Symbols = Data.Make(struct
     let version = "0.1"
   end)
 
+module Brancher_info = Data.Make(struct
+    type t = (int64 * int64 option * int64 list) list
+    let version = "0.1"
+  end)
+
 module type Target = sig
   type t
   val of_blocks : (string * addr * addr) seq -> t
@@ -137,9 +142,14 @@ let resolve_dests memory insn lookup arch =
 (** Brancher is created with (mem → (asm, kinds) insn →
     (word option * [ `Cond | `Fall | `Jump ]) list) signature *)
 let branch_lookup arch path =
-  printf "2.\n%!";
   let open Bil in
-  let lookup = Ida.with_file path brancher_command in
+  (*let lookup = Ida.with_file path brancher_command in*)
+  let id = Data.Cache.digest ~namespace:"ida-brancher"
+      "%s" (Digest.file path) in
+  let lookup = match Brancher_info.Cache.load id with
+    | Some lookup -> lookup
+    | None -> failwith "Preloading IDA info failed : brancher info!"
+  in
   match lookup with
   | [] ->
     warning "didn't find any branches";
@@ -175,16 +185,10 @@ idc.Exit(0)
             Sexp.input_sexps ch |> List.map ~f:blk_of_sexp))
 
 let extract path arch =
-  let id =
-    Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
+  let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
     | Some syms -> syms
-    | None -> match Ida.with_file path symbolizer_command with
-      | [] ->
-        warning "didn't find any symbols";
-        info "this plugin doesn't work with IDA Free";
-        []
-      | syms -> Symbols.Cache.save id syms; syms in
+    | None -> failwith "Preloading IDA info failed : syms!" in
   let size = Arch.addr_size arch in
   let width = Size.in_bits size in
   let addr = Addr.of_int64 ~width in
@@ -284,17 +288,42 @@ let create_mem pos len endian beg bits size =
     Memory.create ~pos:0 ~len endian (addr beg) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
-let loader path =
-  printf "1.\n%!";
-  let id = Data.Cache.digest ~namespace:"ida-loader" "%s"
+(** XXX Must be able to cope when caching is turned off! *)
+let preload_ida_info path =
+  (* preload loader info *)
+  printf "preloading..\n%!";
+  let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
+  (match Img.Cache.load id with
+   | Some _ -> ()
+   | None ->
+     let img = Ida.with_file path load_image in
+     Img.Cache.save id img);
+  (* preload symbols *)
+  let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
+  (match Symbols.Cache.load id with
+   | Some _ -> ()
+   | None -> match Ida.with_file path symbolizer_command with
+     | [] ->
+       warning "didn't find any symbols";
+       info "this plugin doesn't work with IDA Free"
+     | syms -> Symbols.Cache.save id syms);
+  (* preload brancher info *)
+  let id = Data.Cache.digest ~namespace:"ida-brancher" "%s"
       (Digest.file path) in
+  (match Brancher_info.Cache.load id with
+   | Some _ -> ()
+   | None ->
+     let brancher_info = Ida.with_file path brancher_command in
+     Brancher_info.Cache.save id brancher_info)
+
+let loader path =
+  let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
+  preload_ida_info path;
   let (proc,size,sections) =
     match Img.Cache.load id with
     | Some img -> img
-    | None ->
-      let img = Ida.with_file path load_image in
-      Img.Cache.save id img;
-      img in
+    | None -> failwith "Preloading IDA info failed : loader!"
+  in
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
   let endian = Arch.endian arch in
@@ -314,6 +343,7 @@ let loader path =
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               (* annotate insns that branch to extern *)
+              (* tag... lookup...*)
               code',data
             | _ -> code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
@@ -347,17 +377,33 @@ let checked ida_path is_headless =
 
 
 let main () =
+  (*let ida_symbols_info,got_ida_symbols_info = Stream.create () in
+    let ida_loader_info,got_ida_loader_info = Stream.create () in
+    let ida_brancher_info,got_ida_brancher_info = Stream.create () in*)
+
+  (* We would like to get all the IDA information up front. One thing
+     stops us: we don't know the binary path. The loader function is the
+     first to get it, so let's process it all there, then send the
+     streams to each module. (or we could put it in the cache *)
+  Project.Input.register_loader name loader;
+
+
   register_source (module Rooter);
   register_source (module Symbolizer);
   register_source (module Reconstructor);
   register_brancher_source ();
 
-  Project.Input.register_loader name loader;
 
   Project.register_pass
     ~autorun:true ~name:"komapper" (fun proj ->
         let file = Project.get proj filename |> Option.value_exn in
-        let lookup = Ida.with_file file brancher_command in
+        (*let lookup = Ida.with_file file brancher_command in*)
+        let id = Data.Cache.digest ~namespace:"ida-brancher"
+            "%s" (Digest.file file) in
+        let lookup = match Brancher_info.Cache.load id with
+          | Some lookup -> lookup
+          | None -> failwith "Preloading IDA info failed : brancher info!"
+        in
         let relocs = get_relocs lookup in
         Ida_komapper.main proj relocs)
 
