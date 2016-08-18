@@ -374,10 +374,7 @@ let loader path =
               let code' = tag_branches_of_mem_extern code' path lookup in
               code',data
             | _ -> code, Memmap.add data mem sec) in
-  (* register remapper pass here, where we have relocs *)
-  let res =
-    Project.Input.create arch path ~code ~data in
-  res
+  Project.Input.create arch path ~code ~data
 
 
 let require req check =
@@ -408,49 +405,14 @@ let checked ida_path is_headless =
 
 
 let main () =
-  register_source (module Rooter); (* TODO fix extern symbols *)
-  (*register_source (module Symbolizer);*)
-  register_source (module Symbolizer); (* add virtual symbols of ko *)
+  register_source (module Rooter);
+  register_source (module Symbolizer);
   register_source (module Reconstructor);
+
   (* NEED LOOKUP *)
   register_brancher_source ();
-  (* NEEDS lookup *)
-  (* Now a loader is in the bap ecosystem. how does BAP use it to
-     create project? Somewhere it uses Input with the data/code info
-     to create it. where? Through create/create_exn. when does that happen?
-     Things must go through create_exn.  -> means has to go through create.
-     IS called in bap/src/bap_main.ml
-  *)
-
-  (* need to launch register pass after things. get the file path from
-     stream, send to relocs, win *)
 
   Project.Input.register_loader name loader;
-
-  (*  printf "WTF\n%!";
-      Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
-        printf "TRYING!!!\n%!";
-        Or_error.try_with (fun () ->
-            printf "ACTIVE!!!\n%!";
-
-          ))) |> ignore;*)
-
-  (* Requirement: register_pass must happen here, without any
-      shenangans inside stream. If it's in stream and waits for file,
-      then it fucks up (api doesn't work) *)
-
-
-
-  (* wrong_example1.txt *)
-  (*  Stream.watch
-      Project.Info.file (fun _ f ->
-          printf "Fuck you asshole %s\n%!" f;
-          Project.register_pass
-            ~autorun:true ~name:"komapper" (fun proj ->
-                let lookup = Ida.with_file f brancher_command in
-                let relocs = get_relocs lookup in
-                Ida_komapper.main proj relocs
-              ))*)
 
   Project.register_pass
     ~autorun:true ~name:"komapper" (fun proj ->
