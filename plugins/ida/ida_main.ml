@@ -7,23 +7,10 @@ open Bap_ida.Std
 open Format
 open Result.Monad_infix
 
+open Ida_info
+open Ida_commands
+
 include Self()
-
-module Symbols = struct
-  include Data.Make(struct
-      type t = (string * int64 * int64) list
-      let version = "0.1"
-    end)
-  type t = (string * int64 * int64) list
-end
-
-module Brancher_info = struct
-  include Data.Make(struct
-      type t = (int64 * int64 option * int64 list) list
-      let version = "0.1"
-    end)
-  type t = (int64 * int64 option * int64 list) list
-end
 
 module Ida_futures = struct
   type ('a,'b,'c) t =
@@ -34,7 +21,6 @@ end
 
 open Ida_futures
 
-(* XXX needs fixing *)
 let read_future future =
   match Future.peek future with
   | Some v -> v
@@ -47,29 +33,6 @@ module type Target = sig
     val register : string -> t source -> unit
   end
 end
-
-let brancher_command =
-  let script =
-    {|
-from bap.utils.ida import dump_brancher_info
-dump_brancher_info('$output')
-idc.Exit(0)
-|} in
-  Command.create
-    `python
-    ~script
-    ~parser:(fun name ->
-        let branch_of_sexp x =
-          [%of_sexp: int64 * int64 option * int64 list] x in
-        In_channel.with_file name ~f:(fun ch ->
-            Sexp.input_sexps ch |> List.map ~f:branch_of_sexp))
-
-(** (addr * (normal flow 0 or 1) (list of "other flows") *)
-(** speculate: (Jump (0 or 1)) (Fall or Cond) *)
-let branch_lookup_of_file f =
-  let branch_of_sexp x = [%of_sexp: int64 * int64 option * int64 list] x in
-  In_channel.with_file f ~f:(fun ch ->
-      Sexp.input_sexps ch |> List.map ~f:branch_of_sexp)
 
 let addr_of_mem mem =
   Memory.min_addr mem
@@ -192,21 +155,6 @@ let register_brancher_source streams =
             Brancher.create (branch_lookup streams arch file))) in
   Brancher.Factory.register name source
 
-let symbolizer_command =
-  let script =
-    {|
-from bap.utils.ida import dump_symbol_info
-dump_symbol_info('$output')
-idc.Exit(0)
-|} in
-  Command.create
-    `python
-    ~script
-    ~parser:(fun name ->
-        let blk_of_sexp x = [%of_sexp:string*int64*int64] x in
-        In_channel.with_file name ~f:(fun ch ->
-            Sexp.input_sexps ch |> List.map ~f:blk_of_sexp))
-
 
 let extract futures path arch =
   let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
@@ -229,20 +177,6 @@ let register_source streams (module T : Target) =
     Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
 
-type perm = [`code | `data] [@@deriving sexp]
-type section = string * perm * int * (int64 * int)
-  [@@deriving sexp]
-
-type image = string * addr_size * section list [@@deriving sexp]
-
-
-module Img = struct
-  include Data.Make(struct
-      type t = image
-      let version = "0.1"
-    end)
-  type t = image
-end
 
 (** When we use Data.Make, it performs destructive type sbustitiution
     on t to produce the module. So when I pass the module, it doesn't
@@ -267,21 +201,6 @@ let arch_of_procname size name = match String.lowercase name with
   | "mipsb" ->  if size = `r64 then `mips64  else `mips
   | "sparcb" -> if size = `r64 then `sparcv9 else `sparc
   | s -> raise (Unsupported_architecture s)
-
-let read_image name =
-  In_channel.with_file name ~f:(fun ch ->
-      Sexp.input_sexp ch |> image_of_sexp)
-
-let load_image =
-  let script =
-    {|
-from bap.utils.ida import dump_loader_info
-dump_loader_info('$output')
-idc.Exit(0)
-|} in
-  Command.create `python
-    ~script
-    ~parser:read_image
 
 let mapfile path : Bigstring.t =
   let fd = Unix.(openfile path [O_RDONLY] 0o400) in
@@ -326,14 +245,9 @@ let create_mem pos len endian beg bits size =
 
 (** If caching is off, we will always send the info to the future *)
 let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
-  (* preload loader info *)
-
-  let mk_id ~namespace =
-    Data.Cache.digest ~namespace "%s" (Digest.file path) in
-
-  let load_or_save ~namespace (type t) (module M : Data with type t = t)
-      field command =
-    let id = mk_id ~namespace in
+  let preload ~namespace (type t) (module M : Data with type t = t)
+      command field =
+    let id = Data.Cache.digest ~namespace "%s" (Digest.file path) in
     match M.Cache.load id with
     | Some _ -> ()
     | None ->
@@ -342,12 +256,10 @@ let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
       Promise.fulfill (snd (Field.get field futures)) data in
 
   Ida_futures.Fields.iter
-    ~img:(fun field -> load_or_save ~namespace:"ida-loader"
-             (module Img) field load_image)
-    ~symbols:(fun field ->  load_or_save ~namespace:"ida"
-                 (module Symbols) field symbolizer_command)
-    ~brancher:(fun field -> load_or_save ~namespace:"ida-brancher"
-                  (module Brancher_info)  field brancher_command)
+    ~img:(preload ~namespace:"ida-loader" (module Img) load_image)
+    ~symbols:(preload ~namespace:"ida" (module Symbols) symbolizer_command)
+    ~brancher:(preload ~namespace:"ida-brancher"
+                 (module Brancher_info) brancher_command)
 
 let loader (futures : ('a,'b,'c) Ida_futures.t) path =
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
