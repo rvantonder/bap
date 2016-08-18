@@ -134,6 +134,7 @@ let main o =
         ?brancher ?rooter ?symbolizer ?reconstructor  |> function
       | Error err -> raise (Failed_to_create_project err)
       | Ok project ->
+        let project = Project.set project Bap.Std.filename o.filename in
         Project.Cache.save digest project;
         project in
   process o project
