@@ -41,38 +41,6 @@ let addr_of_mem mem =
   | Ok addr -> Some addr
   | Error _ -> None
 
-type edge = Bap_disasm_block.edge [@@deriving sexp]
-type dest = addr option * edge [@@deriving sexp]
-type dests = dest list [@@deriving sexp]
-type full_insn = Bap_disasm_basic.full_insn
-
-let kind_of_dests = function
-  | xs when List.for_all xs ~f:(fun (_,x) -> x = `Fall) -> `Fall
-  | xs -> if List.exists  xs ~f:(fun (_,x) -> x = `Jump)
-    then `Jump
-    else `Cond
-
-let kind_of_branches t f =
-  match kind_of_dests t, kind_of_dests f with
-  | `Jump,`Jump -> `Jump
-  | `Fall,`Fall -> `Fall
-  | _           -> `Cond
-
-let fold_consts = Bil.(fixpoint fold_consts)
-
-let rec dests_of_bil (bil : stmt list) : dests =
-  fold_consts bil |> List.concat_map ~f:dests_of_stmt
-and dests_of_stmt = function
-  | Bil.Jmp (Bil.Int addr) -> [Some addr,`Jump]
-  | Bil.Jmp (_) -> [None, `Jump]
-  | Bil.If (_,yes,no) -> merge_branches yes no
-  | Bil.While (_,ss) -> dests_of_bil ss
-  | _ -> []
-and merge_branches yes no =
-  let x = dests_of_bil yes and y = dests_of_bil no in
-  let kind = kind_of_branches x y in
-  List.(rev_append x y >>| fun (a,_) -> a,kind)
-
 let handle_normal_flow =
   let (!) = Word.of_int64 ~width:32 in
   function
@@ -105,18 +73,8 @@ let resolve_dests memory insn lookup arch =
      that we have branch information for it. *)
   List.find lookup ~f:(fun (needle,_,_) -> needle = addr) >>=
   (* provide the default information to help with other_flow *)
-  let default =
-    let next = Addr.succ (Memory.max_addr memory) in
-    let dests = match Target.lift memory insn with
-      | Error _ -> []
-      | Ok bil -> dests_of_bil bil in
-    let is = Disasm_expert.Basic.Insn.is insn in
-    let fall = Some next, `Fall in
-    match kind_of_dests dests with
-    | `Fall when is `Return -> []
-    | `Jump when is `Call -> fall :: dests
-    | `Cond | `Fall -> fall :: dests
-    | `Jump -> dests
+  let default_brancher = Brancher.of_bil arch in
+  let default = Brancher.resolve default_brancher memory insn
   in
   fun (_,opt,(rest : int64 list)) ->
     let normal_flow = handle_normal_flow opt in
@@ -155,7 +113,6 @@ let register_brancher_source streams =
             Brancher.create (branch_lookup streams arch file))) in
   Brancher.Factory.register name source
 
-
 let extract futures path arch =
   let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
@@ -176,13 +133,6 @@ let register_source streams (module T : Target) =
         extract streams file arch |> T.of_blocks) in
     Stream.merge Project.Info.file Project.Info.arch ~f:extract in
   T.Factory.register name source
-
-
-(** When we use Data.Make, it performs destructive type sbustitiution
-    on t to produce the module. So when I pass the module, it doesn't
-    see t any more. But that means if we include it in another module,
-    it won't have a conflicting t. So just define the new t in a
-    wrapped module *)
 
 exception Unsupported_architecture of string
 
@@ -294,7 +244,6 @@ let loader (futures : ('a,'b,'c) Ida_futures.t) path =
               code',data
             | _ -> code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
-
 
 let require req check =
   if check
