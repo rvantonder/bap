@@ -304,7 +304,7 @@ let mapfile path : Bigstring.t =
   Unix.close fd;
   data
 
-let get_relocs file lookup =
+let get_relocs lookup =
   let (!) = Word.of_int64 ~width:32 in
   List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
       match List.hd l with
@@ -421,15 +421,26 @@ let main () =
      Things must go through create_exn.  -> means has to go through create.
      IS called in bap/src/bap_main.ml
   *)
-  Project.Input.register_loader name loader;
+
   (* need to launch register pass after things. get the file path from
      stream, send to relocs, win *)
-  Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
-      Or_error.try_with (fun () ->
-          let lookup = Ida.with_file file brancher_command in
-          let relocs = get_relocs file lookup in
-          Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
-              Ida_komapper.main proj relocs))) |>ignore (*XXX scary*)
+
+  Project.Input.register_loader name loader;
+
+  (*  printf "WTF\n%!";
+      Stream.merge Project.Info.file Project.Info.arch ~f:(fun file arch ->
+        printf "TRYING!!!\n%!";
+        Or_error.try_with (fun () ->
+            printf "ACTIVE!!!\n%!";
+
+          ))) |> ignore;*)
+
+  let file = "/home/vagrant/usbcore.ko" in
+  let lookup = Ida.with_file file brancher_command in
+  let relocs = get_relocs lookup in
+
+  Project.register_pass
+    ~autorun:true ~name:"komapper" (fun proj -> Ida_komapper.main proj relocs)
 
 let () =
   let () = Config.manpage [
