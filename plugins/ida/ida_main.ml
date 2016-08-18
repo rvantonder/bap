@@ -211,9 +211,10 @@ let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
     ~brancher:(preload ~namespace:"ida-brancher"
                  (module Brancher_info) brancher_command)
 
-let loader (futures : ('a,'b,'c) Ida_futures.t) path =
-  let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
+let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
+  Promise.fulfill got_path path;
   preload_ida_info path futures;
+  let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   let (proc,size,sections) =
     match Img.Cache.load id with
     | Some img -> img
@@ -273,6 +274,7 @@ let checked ida_path is_headless =
 
 
 let main () =
+  let path,got_path = Future.create () in
   let ida_symbols_info,got_ida_symbols_info = Future.create () in
   let ida_loader_info,got_ida_loader_info = Future.create () in
   let ida_brancher_info,got_ida_brancher_info = Future.create () in
@@ -287,7 +289,7 @@ let main () =
      img = (ida_loader_info, got_ida_loader_info);
      brancher = (ida_brancher_info,got_ida_brancher_info)} in
 
-  let loader = loader futures in
+  let loader = loader got_path futures in
   Project.Input.register_loader name loader;
 
   register_source futures (module Rooter);
@@ -296,7 +298,11 @@ let main () =
   register_brancher_source futures;
 
   Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
-      let file = Project.get proj filename |> Option.value_exn in
+      let file = match Future.peek path with
+        | Some path -> path
+        (* XXX change to warn and skip *)
+        | None -> failwith "Komapper pass cannot continue: no file path specified."
+      in
       let id = Data.Cache.digest ~namespace:"ida-brancher"
           "%s" (Digest.file file) in
       let lookup = match Brancher_info.Cache.load id with
