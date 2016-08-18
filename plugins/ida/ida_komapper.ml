@@ -101,15 +101,15 @@ let remap cfg relocs arch =
 
 let main proj relocs =
   let open Option in
-  let mem = Project.memory proj in
-  let relocs =
+  (*let mem = Project.memory proj in*)
+  (*let relocs =
     Memmap.to_sequence mem |> Seq.fold ~init:[] ~f:(fun acc (mem',tag) ->
         (Value.get comment tag >>= fun s ->
          Memory.min_addr mem' |> fun w ->
          let x = Int.of_string s |> Word.of_int ~width:32 in
          return [(w,x)])
         |> Option.value ~default:[]
-        |> fun r -> r@acc) in
+        |> fun r -> r@acc) in*)
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in
   (* Build a new symtab and just change cfg after mapping >:) *)
