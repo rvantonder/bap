@@ -213,7 +213,9 @@ let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
                  (module Brancher_info) brancher_command)
 
 let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
+  printf "Before Fulfilling path\n%!";
   Promise.fulfill got_path path;
+  printf "After Fulfilling path\n%!";
   preload_ida_info path futures;
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   let (proc,size,sections) =
@@ -275,15 +277,12 @@ let checked ida_path is_headless =
 
 
 let main () =
+  (* path is here so that we can pass the filename. we need to cache
+     it there too in case the loader gets cached. I've seen it happen.*)
   let path,got_path = Future.create () in
   let ida_symbols_info,got_ida_symbols_info = Future.create () in
   let ida_loader_info,got_ida_loader_info = Future.create () in
   let ida_brancher_info,got_ida_brancher_info = Future.create () in
-
-  (* We would like to get all the IDA information up front. One thing
-     stops us: we don't know the binary path. The loader function is the
-     first to get it, so let's process it all there, then send the
-     streams to each module. (or we could put it in the cache *)
 
   let futures =
     {symbols = (ida_symbols_info, got_ida_symbols_info);
@@ -299,7 +298,27 @@ let main () =
   register_brancher_source futures;
 
   Project.register_pass ~autorun:true ~name:"komapper" (fun proj ->
-      match Future.peek path with
+      (* A module to cache filename *)
+      let module Filename = Data.Make(
+        struct type t = string
+          let version = "0.1"
+        end) in
+
+      let file = match Future.peek path with
+        (* the first time, save it to digest for this proj *)
+        | Some file ->
+          let id = Data.Cache.digest ~namespace:"komapper"
+              "%s" (Digest.string name) in
+          Filename.Cache.save id file;
+          Some file
+        (* If it fails, the loader info is probably cached. Try get
+           it from the cache *)
+        | None ->
+          let id = Data.Cache.digest ~namespace:"komapper"
+              "%s" (Digest.string name) in
+          Filename.Cache.load id in
+
+      match file with
       | Some file when String.is_suffix file ".ko" ->
         let id = Data.Cache.digest ~namespace:"ida-brancher"
             "%s" (Digest.file file) in
@@ -310,8 +329,8 @@ let main () =
             read_future (fst futures.brancher) in
         let relocs = get_relocs lookup in
         Ida_komapper.main proj relocs
-      | Some _ -> info "Komapper skipped: no .ko extension"; proj
-      | None -> warning "Komapper pass cannot continue: no file path specified.";
+      | Some file -> info "Komapper skipped: no .ko extension"; proj
+      | None -> warning "Komapper skipped: no filename from loader or cache.";
         proj)
 
 let () =
