@@ -121,9 +121,7 @@ let clean_extern name proj entry cfg arch =
   Memmap.dominators memmap |>
   Seq.find_map ~f:(fun (mem,tag) ->
       match Value.get Image.section tag with
-      | Some "extern" ->
-        printf "%s in extern\n%!" name;
-        Some mem
+      | Some "extern" -> Some mem
       | _ -> None) |> function
   | Some mem ->
     (* I need any instruction in a piece of memory which lifts
@@ -131,16 +129,14 @@ let clean_extern name proj entry cfg arch =
     let s = Bigstring.of_string "\x00\x00\x00\x00" in
     let mem' = match Memory.create LittleEndian (Memory.min_addr mem) s with
       | Ok x -> x
-      | _ -> failwith "How could this possibly fail?" in
+      | _ -> failwith "How could this possibly fail?" in (* XXX *)
     (match full_insn_of_mem mem' (Arch.to_string arch) with
      | Ok (_,Some x,_) ->
-       printf "Success! %s\n%!" name;
        let bil = [Bil.(Jmp (Unknown ("kernel <3", Imm 0)))] in
        let nop_insn = Insn.of_basic ~bil x in
        let nop_block = Block.create mem' [mem',nop_insn] in
        let nop_cfg = Graphs.Cfg.Node.insert nop_block Graphs.Cfg.empty in
        (nop_block,nop_cfg)
-
      | _ ->
        warning "Failed to disassemble mem. Consider using empty memory";
        entry,cfg)
