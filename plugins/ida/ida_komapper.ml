@@ -135,11 +135,12 @@ let clean_extern name proj entry cfg arch =
     (match full_insn_of_mem mem' (Arch.to_string arch) with
      | Ok (_,Some x,_) ->
        printf "Success! %s\n%!" name;
-       let bil = [Bil.(Jmp (Unknown ("kernel_love",Imm 0)))] in
+       let bil = [Bil.(Jmp (Unknown ("kernel <3", Imm 0)))] in
        let nop_insn = Insn.of_basic ~bil x in
-       (* XXX use mem or mem'? *)
-       (* XXX add node to cfg? *)
-       (Block.create mem' [mem',nop_insn],Graphs.Cfg.empty)
+       let nop_block = Block.create mem' [mem',nop_insn] in
+       let nop_cfg = Graphs.Cfg.Node.insert nop_block Graphs.Cfg.empty in
+       (nop_block,nop_cfg)
+
      | _ ->
        warning "Failed to disassemble mem. Consider using empty memory";
        entry,cfg)
