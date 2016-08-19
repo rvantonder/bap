@@ -213,9 +213,7 @@ let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
                  (module Brancher_info) brancher_command)
 
 let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
-  printf "Before Fulfilling path\n%!";
   Promise.fulfill got_path path;
-  printf "After Fulfilling path\n%!";
   preload_ida_info path futures;
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   let (proc,size,sections) =
