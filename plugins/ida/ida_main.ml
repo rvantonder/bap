@@ -163,7 +163,7 @@ let get_relocs lookup =
   let (!) = Word.of_int64 ~width:32 in
   List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
       match List.hd l with
-      | Some dest -> (!addr,!dest)::acc
+      | Some dest -> (!addr,!dest,List.map ~f:(!) l)::acc
       | None -> acc)
 
 (* XXX only for arm *)
@@ -179,9 +179,10 @@ let tag_branches_of_mem_extern memmap path lookup =
   |> Seq.fold ~init:memmap ~f:(fun memmap' (mem,x) ->
       List.fold ~init:memmap' lookup ~f:(fun memmap_inner (addr,_,l) ->
           (!@(Memory.view ~word_size:`r8 ~from:!addr ~words:4 mem)
-           >>= fun mem' -> List.hd l >>= fun dest ->
+           >>= fun mem' ->
+           let s = [%sexp_of: int64 list] l in
            Memmap.add memmap_inner mem'
-             (Value.create comment (Int64.to_string dest)) |> return)
+             (Value.create comment (Sexp.to_string s)) |> return)
           |> Option.value ~default:memmap_inner))
 
 let create_mem pos len endian beg bits size =
