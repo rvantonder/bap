@@ -144,6 +144,7 @@ let clean_extern name proj entry cfg arch =
 
 let main proj relocs =
   let open Option in
+  let open Ida_info in
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in
   (* Build a new symtab and just change cfg after mapping >:) *)

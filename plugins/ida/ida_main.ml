@@ -221,7 +221,14 @@ let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
     | Some img -> img
     | None ->
       info "No caching enabled, using streams!";
-      read_future (fst futures.img)
+      read_future (fst futures.img) in
+  let id = Data.Cache.digest ~namespace:"ida-brancher" "%s" (Digest.file path) in
+  let lookup =
+    match Brancher_info.Cache.load id with (*XXX make generic lookup routine*)
+    | Some img -> img
+    | None ->
+      info "No caching enabled, using streams!";
+      read_future (fst futures.brancher)
   in
   let bits = mapfile path in
   let arch = arch_of_procname size proc in
@@ -242,7 +249,7 @@ let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               (* annotate insns that branch to extern *)
-              (* tag... lookup...*)
+              let code' = tag_branches_of_mem_extern code' path lookup in
               code',data
             | _ -> code, Memmap.add data mem sec) in
   Project.Input.create arch path ~code ~data
@@ -315,7 +322,6 @@ let main () =
           let id = Data.Cache.digest ~namespace:"komapper"
               "%s" (Digest.string name) in
           Filename.Cache.load id in
-
       match file with
       | Some file when String.is_suffix file ".ko" ->
         let id = Data.Cache.digest ~namespace:"ida-brancher"
@@ -325,6 +331,7 @@ let main () =
           | None ->
             info "No caching enabled, using futures!";
             read_future (fst futures.brancher) in
+        printf "%a@." Brancher_info.pp lookup; (*XXX debug*)
         let relocs = get_relocs lookup in
         Ida_komapper.main proj relocs
       | Some file -> info "Komapper skipped: no .ko extension"; proj
