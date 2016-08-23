@@ -1,4 +1,5 @@
 PKG cmdliner
 PKG bap-ida
+PKG bap-arm
 B ../../_build/plugins/ida
 REC

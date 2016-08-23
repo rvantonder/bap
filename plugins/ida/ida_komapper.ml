@@ -5,6 +5,7 @@ open Format
 open Regular.Std
 open Graphlib.Std
 
+
 (* DEPRECATED *)
 (*
 let relocs_of_mem proj =
@@ -160,31 +161,41 @@ let blk_tid_of_addr addr prog =
   finder#run prog None >>= fun res ->
   return (Term.tid res)
 
-class jump_table_mapper (relocs : (word * word list) list) prog = object(self)
-  inherit Term.mapper as super
+class jump_table_mapper (relocs : (word * word list) list) prog arch =
+  object(self)
+    inherit Term.mapper as super
 
-  method map_blk blk =
-    let open Option in
-    super#map_blk blk |> fun blk ->
-    let addr_of_jmp jmp = Term.get_attr jmp Disasm.insn_addr in
-    let add_jmps =
-      Term.to_sequence jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
-          List.find_map relocs ~f:(fun (addr,dests) ->
-              addr_of_jmp jmp >>= fun addr' ->
-              some_if (addr = addr') dests) |>
-          Option.fold ~init:acc ~f:(fun acc dests ->
-              List.fold dests ~init:acc ~f:(fun acc addr ->
-                  (* get the tids of the destination blocks *)
-                  Option.fold (blk_tid_of_addr addr prog) ~init:acc ~f:(fun acc tid ->
-                      (Jmp.create_goto (Direct tid))::acc)) (*XXX with_cond? *)
-            )) in
-    List.fold add_jmps ~init:blk ~f:(fun blk x -> Term.append jmp_t blk x)
+    method map_blk blk =
+      let module Target = (val target_of_arch arch) in (* XXX fix scope *)
+      let open ARM in
+      let open Option in
+      super#map_blk blk |> fun blk ->
+      let addr_of_jmp jmp = Term.get_attr jmp Disasm.insn_addr in
+      let add_jmps =
+        Term.to_sequence jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
+            List.find_map relocs ~f:(fun (addr,dests) ->
+                addr_of_jmp jmp >>= fun addr' ->
+                some_if (addr = addr') dests) |>
+            Option.fold ~init:acc ~f:(fun acc dests ->
+                List.foldi dests ~init:acc ~f:(fun i acc addr ->
+                    (* get the tids of the destination blocks *)
+                    Option.fold (blk_tid_of_addr addr prog) ~init:acc ~f:(fun acc tid ->
+                        (** when (~CF) | ZF goto mem [(R3 << 0x2:32) + 0x1390:32 *)
+                        (** -> when (~CF) | ZF && R3 = 0,1,2,3...i *)
+                        let cond = Jmp.cond jmp in
+                        let w = Word.of_int ~width:32 i in
+                        (*let r3 = Target.CPU.*)
+                        let r3 = ARM.CPU.r3 in (* XXX arm only *)
+                        let cond = Bil.(cond land (var r3 = int w)) in
+                        (Jmp.create_goto ~cond (Direct tid))::acc)) (*XXX with_cond? *)
+              )) in
+      List.fold add_jmps ~init:blk ~f:(fun blk x -> Term.append jmp_t blk x)
 
-end
+  end
 
-let map_jump_table relocs prog : program term =
+let map_jump_table relocs arch prog : program term =
   let relocs = List.filter relocs ~f:(fun (addr,dests) -> List.length dests > 1) in
-  let mapper = new jump_table_mapper relocs prog in
+  let mapper = new jump_table_mapper relocs prog arch in
   mapper#run prog
 
 let main proj relocs relocs_other =
@@ -202,4 +213,6 @@ let main proj relocs relocs_other =
         let fn_start,cfg' = clean_extern fn_name proj fn_start_block
             cfg' (Project.arch proj) in
         Symtab.add_symbol acc (fn_name,fn_start_block,cfg')) in
-  Program.lift symtab' |> map_jump_table relocs_other |> Project.with_program proj
+  Program.lift symtab' |>
+  map_jump_table relocs_other (Project.arch proj) |>
+  Project.with_program proj
