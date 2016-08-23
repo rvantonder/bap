@@ -154,7 +154,7 @@ class find_ir_blk_of_addr addr = object(self)
     | _ -> super#visit_blk blk res
 end
 
-let ir_blk_of_addr addr prog =
+let blk_tid_of_addr addr prog =
   let open Option in
   let finder = new find_ir_blk_of_addr addr in
   finder#run prog None >>= fun res ->
@@ -171,14 +171,13 @@ class jump_table_mapper (relocs : (word * word list) list) prog = object(self)
       Term.to_sequence jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
           List.find_map relocs ~f:(fun (addr,dests) ->
               addr_of_jmp jmp >>= fun addr' ->
-              some_if (addr = addr') dests) |> function
-          | Some dests ->
-            let jumps = List.fold dests ~init:[] ~f:(fun acc addr ->
-                (* get the tids of the destination blocks *)
-                Option.fold (ir_blk_of_addr addr prog) ~init:acc ~f:(fun acc tid ->
-                    (Jmp.create_goto (Direct tid))::acc)) in
-            jumps@acc
-          | None -> acc) in
+              some_if (addr = addr') dests) |>
+          Option.fold ~init:acc ~f:(fun acc dests ->
+              List.fold dests ~init:acc ~f:(fun acc addr ->
+                  (* get the tids of the destination blocks *)
+                  Option.fold (blk_tid_of_addr addr prog) ~init:acc ~f:(fun acc tid ->
+                      (Jmp.create_goto (Direct tid))::acc)) (*XXX with_cond? *)
+            )) in
     List.fold add_jmps ~init:blk ~f:(fun blk x -> Term.append jmp_t blk x)
 
 end
