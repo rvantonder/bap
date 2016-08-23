@@ -166,6 +166,13 @@ let get_relocs lookup =
       | Some dest -> (!addr,!dest)::acc
       | None -> acc)
 
+let get_relocs_other lookup =
+  let (!) = Word.of_int64 ~width:32 in
+  List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
+      match List.hd l with
+      | Some dest -> (!addr,List.map ~f:(!) l)::acc
+      | None -> acc)
+
 (* XXX only for arm *)
 let tag_branches_of_mem_extern memmap path lookup =
   let (!) = Word.of_int64 ~width:32 in
@@ -333,7 +340,8 @@ let main () =
             read_future (fst futures.brancher) in
         printf "%a@." Brancher_info.pp lookup; (*XXX debug*)
         let relocs = get_relocs lookup in
-        Ida_komapper.main proj relocs
+        let relocs_other = get_relocs_other lookup in
+        Ida_komapper.main proj relocs relocs_other
       | Some file -> info "Komapper skipped: no .ko extension"; proj
       | None -> warning "Komapper skipped: no filename from loader or cache.";
         proj)

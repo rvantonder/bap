@@ -142,7 +142,53 @@ let clean_extern name proj entry cfg arch =
        entry,cfg)
   | None -> entry,cfg
 
-let main proj relocs =
+
+
+class find_ir_blk_of_addr addr = object(self)
+  inherit [Blk.t option] Term.visitor as super
+
+  method! visit_blk blk res =
+    let addr_of_blk t = Term.get_attr t Disasm.block in
+    match addr_of_blk blk with
+    | Some addr' when addr' = addr -> super#visit_blk blk (Some blk)
+    | _ -> super#visit_blk blk res
+end
+
+let ir_blk_of_addr addr prog =
+  let open Option in
+  let finder = new find_ir_blk_of_addr addr in
+  finder#run prog None >>= fun res ->
+  return (Term.tid res)
+
+class jump_table_mapper (relocs : (word * word list) list) prog = object(self)
+  inherit Term.mapper as super
+
+  method map_blk blk =
+    let open Option in
+    super#map_blk blk |> fun blk ->
+    let addr_of_jmp jmp = Term.get_attr jmp Disasm.insn_addr in
+    let add_jmps =
+      Term.to_sequence jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
+          List.find_map relocs ~f:(fun (addr,dests) ->
+              addr_of_jmp jmp >>= fun addr' ->
+              some_if (addr = addr') dests) |> function
+          | Some dests ->
+            let jumps = List.fold dests ~init:[] ~f:(fun acc addr ->
+                (* get the tids of the destination blocks *)
+                Option.fold (ir_blk_of_addr addr prog) ~init:acc ~f:(fun acc tid ->
+                    (Jmp.create_goto (Direct tid))::acc)) in
+            jumps@acc
+          | None -> acc) in
+    List.fold add_jmps ~init:blk ~f:(fun blk x -> Term.append jmp_t blk x)
+
+end
+
+let map_jump_table relocs prog : program term =
+  let relocs = List.filter relocs ~f:(fun (addr,dests) -> List.length dests > 1) in
+  let mapper = new jump_table_mapper relocs prog in
+  mapper#run prog
+
+let main proj relocs relocs_other =
   let open Option in
   let open Ida_info in
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
@@ -157,4 +203,4 @@ let main proj relocs =
         let fn_start,cfg' = clean_extern fn_name proj fn_start_block
             cfg' (Project.arch proj) in
         Symtab.add_symbol acc (fn_name,fn_start_block,cfg')) in
-  Program.lift symtab' |> Project.with_program proj
+  Program.lift symtab' |> map_jump_table relocs_other |> Project.with_program proj
