@@ -162,7 +162,7 @@ let blk_tid_of_addr addr prog =
   return (Term.tid res)
 
 (** tid to replace, and what should be placed after it *)
-type switch_replacement = (tid * jmp term list)
+type switch_replacement = (jmp term * jmp term list)
 
 class jump_table_mapper (relocs : (word * word list) list) prog arch =
   let get_replacement_jmps jmp acc x = Option.fold x ~init:[] ~f:(fun acc dests ->
@@ -186,15 +186,28 @@ class jump_table_mapper (relocs : (word * word list) list) prog arch =
       super#map_blk blk |> fun blk ->
       let addr_of_jmp jmp = Term.get_attr jmp Disasm.insn_addr in
       let res : switch_replacement list =
-        Term.to_sequence jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
+        Term.enum jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
             List.find_map relocs ~f:(fun (addr,dests) ->
                 addr_of_jmp jmp >>= fun addr' ->
                 some_if (addr = addr') dests) |>
-            get_replacement_jmps jmp acc |> List.rev |> fun targets ->
-            (Term.tid jmp,targets)::acc) in
+            get_replacement_jmps jmp acc |> fun targets ->
+            (jmp,targets)::acc) in
       List.fold res ~init:blk ~f:(fun blk (site,add_jmps) ->
-          List.fold add_jmps ~init:blk ~f:(fun blk x ->
-              Term.append jmp_t blk x))
+          let blk' =
+            List.fold add_jmps ~init:blk ~f:(fun blk x ->
+                begin
+                  Term.get_attr site Disasm.insn >>= fun insn ->
+                  Term.set_attr x Disasm.insn insn |> fun x' ->
+                  Term.get_attr site Disasm.insn_addr >>= fun insn_addr ->
+                  Term.set_attr x' Disasm.insn_addr insn_addr |> return
+                end |> Option.value ~default:x |>
+                Term.append ~after:(Term.tid site) jmp_t blk
+              ) in
+          (* must remove after everything has been added after site. But only
+             if we added jumps *)
+          if List.length add_jmps > 0
+          then Term.remove jmp_t blk' (Term.tid site)
+          else blk)
   end
 
 let map_jump_table relocs arch prog : program term =
