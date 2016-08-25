@@ -295,7 +295,7 @@ let main proj relocs relocs_other =
         (* first, perform relocation *)
         let fn_start',cfg' = remap symtab fn_start_block fn_cfg relocs (Project.arch proj) in
         (* now make the function clean if it is in .extern *)
-        let fn_start',cfg' = clean_extern fn_name proj fn_start'
+        let _,cfg' = clean_extern fn_name proj fn_start'
             cfg' (Project.arch proj) in
         printf "@. What we expect for %s? @." fn_name;
         print_block fn_start_block;
