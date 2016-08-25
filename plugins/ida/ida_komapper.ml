@@ -284,7 +284,7 @@ let print_symbols proj =
 let main proj relocs relocs_other =
   let open Option in
   let open Ida_info in
-  (*print_sections proj;*)
+  print_sections proj;
   print_symbols proj;
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in

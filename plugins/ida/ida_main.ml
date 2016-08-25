@@ -198,7 +198,8 @@ let create_mem pos len endian beg bits size =
   match pos with
   | -1 ->
     info "Creating synthetic IDA section %s with len %d" name len;
-    Memory.create ~pos:0 ~len endian (addr beg) bits
+    (* XXX make space for elf header *)
+    Memory.create ~pos:0 ~len endian (addr Int64.(beg - Int64.of_int 0x4)) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
 (** If caching is off, we will always send the info to the future *)
