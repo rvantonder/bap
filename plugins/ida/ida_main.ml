@@ -339,7 +339,7 @@ let main () =
           | None ->
             info "No caching enabled, using futures!";
             read_future (fst futures.brancher) in
-        printf "%a@." Brancher_info.pp lookup; (*XXX debug*)
+        (*printf "%a@." Brancher_info.pp lookup;*)
         let relocs = get_relocs lookup in
         let relocs_other = get_relocs_other lookup in
         Ida_komapper.main proj relocs relocs_other
