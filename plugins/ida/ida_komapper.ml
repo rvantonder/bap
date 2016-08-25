@@ -22,8 +22,10 @@ let relocs_of_mem proj =
 
 let map_pc_to_dest w relocs =
   let open Option in
-  List.find_map relocs ~f:(fun (pc,dest) -> some_if (w = pc) dest)
-  >>= fun dest -> return (Bil.int dest)
+  List.find_map relocs ~f:(fun (pc,dest) -> some_if (w = pc) (pc,dest))
+  >>= fun (pc,dest) ->
+  printf "PC %a will remap to %a@." Word.pp pc Word.pp dest;
+  return (Bil.int dest)
 
 class bil_ko_symbol_relocator relocs = object(self)
   inherit Stmt.mapper as super
@@ -32,13 +34,20 @@ class bil_ko_symbol_relocator relocs = object(self)
       addresses, in relocs, it's *probably* jumping to itself, so it
       is a target for relocation. We substitute it with [w], our
       address in the table *)
+  (** Problem: there's a BIL jmp to destination 0x2380 which is a fallthrough,
+      and it's not getting picked up here. we should substitute it with that
+      fallthrough dest. But what to do since there can be multiple dests? How
+      do we know it should be the fallthrough and not a conditional? Do
+      conditionals first, then fallthroughs, and cross fingers? *)
   method map_jmp e =
     let open Option in
     match e with
     | Bil.Int w ->
       map_pc_to_dest w relocs
       |> Option.value ~default:(Bil.int w)
-      |> super#map_jmp
+      |> fun res ->
+      printf "Bil jmp remap: %a -> %a" Exp.pp e Exp.pp res;
+      super#map_jmp res
     | _ -> super#map_jmp e
 end
 
@@ -86,34 +95,82 @@ let remap_block b memory arch relocs =
       let bil' = bil_remapper#run bil in
       (*debug_bil_transform bil bil';*)
       match full_insn_of_mem mem arch with
-      | Ok (_,Some x,_) -> (mem,Insn.of_basic ~bil:bil' x)
-      | _ -> (mem,insn))
+      | Ok (_,Some x,_) ->
+        printf "Success! REplacement: %a\n" Bil.pp bil';
+        (mem,Insn.of_basic ~bil:bil' x)
+      | _ ->
+        printf "Failed for mem with addr %a\n" Word.pp @@ Memory.min_addr mem;
+        (mem,insn))
   |> Block.create memory
+
+let debug_edges ins outs b =
+  printf "==========================================@.";
+  Seq.iter ins ~f:(fun _in ->
+      printf "In: %a@." Block.pp @@ Graphs.Cfg.Edge.src _in);
+  Seq.iter outs ~f:(fun _out ->
+      printf "Out: %a@." Block.pp @@ Graphs.Cfg.Edge.dst _out);
+  printf "For Block %a@." Block.pp b;
+  printf "==========================================@."
+
+let block_of_addr everything addr =
+  let enter_node _ blk s =
+    match s with
+    | Some result -> Some result
+    | None ->
+      if Block.addr blk = addr then Some blk else None in
+  Symtab.to_sequence everything |> Seq.find_map ~f:(fun (_,_,cfg) ->
+      Graphlib.depth_first_search (module Graphs.Cfg) cfg ~init:None ~enter_node)
+
+let print_block block =
+  printf "%a" Block.pp block;
+  Block.insns block |> List.iter ~f:(fun (m,i) ->
+      printf "%a@." Bil.pp @@ Insn.bil i);
+  printf "@."
 
 (** Destructs a disassembly block to instruction, transforms the bil
     with relocation information, and reconstructs *)
-class remap_cfg relocs arch = object(self)
+class remap_cfg everything entry relocs arch = object(self)
   (* types from bap.mli line 4789, Graphs.Cfg. Use the
      identity_visitor so that our class conforms to the dfs_visitor
      type*)
   (* The last type, cfg, which is passed as third argument to
      all methods, is my user state!*)
-  inherit [block, Graphs.Cfg.edge, cfg] Graphlib.dfs_identity_visitor
-  method! enter_node _ b cfg =
+  inherit [block, Graphs.Cfg.edge, block * cfg] Graphlib.dfs_identity_visitor
+  method! enter_node _ b (entry,cfg) =
+    (*printf "@.@. ENTER @.@.";*)
+    let (!) = Word.of_int ~width:32 in
     let memory = Block.memory b in
     let b' = remap_block b memory arch relocs in
     let ins = Graphs.Cfg.Node.inputs b cfg in
     let outs = Graphs.Cfg.Node.outputs b cfg in
+    (*let outs =
+      if Block.addr b = !0x2370 then
+        begin
+          printf "Trying baby";
+          match block_of_addr everything !0x2380 with
+          | Some dest ->
+            printf "Creating that fake edge";
+            (Graphs.Cfg.Edge.create b dest `Fall)^::outs
+          | None -> outs end
+      else outs in*)
+    (*debug_edges ins outs b;
+      printf "Removing\n";
+      print_block b;
+      printf "Inserting\n";
+      print_block b';
+      printf "@.@. EXIT @.@.";*)
     (* we remove the original block, and update the src/dst edges *)
     cfg |> Graphs.Cfg.Node.remove b |> Graphs.Cfg.Node.insert b' |> fun cfg' ->
     Seq.fold ~init:cfg' ins ~f:(Cfg.update_dst b') |> fun cfg' ->
-    Seq.fold ~init:cfg' outs ~f:(Cfg.update_src b')
+    Seq.fold ~init:cfg' outs ~f:(Cfg.update_src b') |> fun res ->
+    if Block.addr b' = Block.addr entry then (b',res)
+    else (entry,res)
 end
 
-let remap cfg relocs arch =
+let remap everything entry cfg relocs arch =
   let cfg' = cfg in
-  let visitor = new remap_cfg relocs arch in
-  Graphlib.depth_first_visit (module Graphs.Cfg) cfg ~init:cfg'
+  let visitor = new remap_cfg everything entry relocs arch in
+  Graphlib.depth_first_visit (module Graphs.Cfg) cfg ~init:(entry,cfg')
     visitor
 
 let clean_extern name proj entry cfg arch =
@@ -215,9 +272,20 @@ let map_jump_table relocs arch prog : program term =
   let mapper = new jump_table_mapper relocs prog arch in
   mapper#run prog
 
+let print_sections proj =
+  Project.memory proj |> Memmap.to_sequence |> Seq.iter ~f:(fun (mem,x) ->
+      Option.iter (Value.get Image.section x) ~f:(fun name ->
+          printf "Section: %s@.%a@." name Memory.pp mem))
+
+let print_symbols proj =
+  Project.symbols proj |> Symtab.to_sequence |> Seq.iter ~f:(fun (name,_,_) ->
+      printf "%s\n" name)
+
 let main proj relocs relocs_other =
   let open Option in
   let open Ida_info in
+  (*print_sections proj;*)
+  print_symbols proj;
   (* We need a symtab to do Program.lift. Just start with the original symtab *)
   let symtab = Project.symbols proj in
   (* Build a new symtab and just change cfg after mapping >:) *)
@@ -225,11 +293,18 @@ let main proj relocs relocs_other =
     Symtab.to_sequence symtab |>
     Seq.fold ~init:(Symtab.empty) ~f:(fun acc (fn_name,fn_start_block,fn_cfg) ->
         (* first, perform relocation *)
-        let cfg' = remap fn_cfg relocs (Project.arch proj) in
+        let fn_start',cfg' = remap symtab fn_start_block fn_cfg relocs (Project.arch proj) in
         (* now make the function clean if it is in .extern *)
-        let fn_start,cfg' = clean_extern fn_name proj fn_start_block
+        let fn_start',cfg' = clean_extern fn_name proj fn_start'
             cfg' (Project.arch proj) in
-        Symtab.add_symbol acc (fn_name,fn_start_block,cfg')) in
+        printf "@. What we expect for %s? @." fn_name;
+        print_block fn_start_block;
+        printf "@. /End @.";
+        Symtab.add_symbol acc (fn_name,fn_start',cfg')) in
   Program.lift symtab' |>
   map_jump_table relocs_other (Project.arch proj) |>
   Project.with_program proj
+
+(** Problem is: bil is updated in entry block, but we dont' update the
+    entry itself. when it builds, it uses that block and the fucking edges,
+    so our change gets lost *)
