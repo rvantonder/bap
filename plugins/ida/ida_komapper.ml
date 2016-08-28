@@ -157,7 +157,7 @@ class find_ir_blk_of_addr addr = object(self)
   inherit [Blk.t option] Term.visitor as super
 
   method! visit_blk blk res =
-    let addr_of_blk t = Term.get_attr t Disasm.block in
+    let addr_of_blk t = Term.get_attr t address in
     match addr_of_blk blk with
     | Some addr' when addr' = addr -> super#visit_blk blk (Some blk)
     | _ -> super#visit_blk blk res
@@ -192,7 +192,7 @@ class jump_table_mapper (relocs : (word * word list) list) prog arch =
       let open ARM in
       let open Option in
       super#map_blk blk |> fun blk ->
-      let addr_of_jmp jmp = Term.get_attr jmp Disasm.insn_addr in
+      let addr_of_jmp jmp = Term.get_attr jmp address in
       let res : switch_replacement list =
         Term.enum jmp_t blk |> Seq.fold ~init:[] ~f:(fun acc jmp ->
             List.find_map relocs ~f:(fun (addr,dests) ->
@@ -206,8 +206,8 @@ class jump_table_mapper (relocs : (word * word list) list) prog arch =
                 begin
                   Term.get_attr site Disasm.insn >>= fun insn ->
                   Term.set_attr x Disasm.insn insn |> fun x' ->
-                  Term.get_attr site Disasm.insn_addr >>= fun insn_addr ->
-                  Term.set_attr x' Disasm.insn_addr insn_addr |> return
+                  Term.get_attr site address >>= fun insn_addr ->
+                  Term.set_attr x' address insn_addr |> return
                 end |> Option.value ~default:x |>
                 Term.append ~after:(Term.tid site) jmp_t blk
               ) in
