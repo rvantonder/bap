@@ -197,7 +197,7 @@ let create_mem pos len endian beg bits size =
       against "extern" *)
   match pos with
   | -1 ->
-    info "Creating synthetic IDA section %s with len %d" name len;
+    info "Creating synthetic IDA section %S with len %d" name len;
     (* XXX make space for elf header *)
     Memory.create ~pos:0 ~len endian (addr Int64.(beg - Int64.of_int 0x4)) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
@@ -244,6 +244,7 @@ let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
+          info "Processing section %S" name;
           let mem_or_error = create_mem pos len endian beg bits size in
           match mem_or_error with
           | Error err ->
@@ -253,7 +254,9 @@ let loader got_path (futures : ('a,'b,'c) Ida_futures.t) path =
             let sec = Value.create Image.section name in
             match perm,name with
             | `code,_ -> Memmap.add code mem sec, data
-            | _,"extern" ->
+            | _,"extern" (* linux .ko modules *)
+            | _,"_idata" -> (* windows .sys drivers *)
+              info "Handling _idata section";
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               (* annotate insns that branch to extern *)
@@ -331,7 +334,8 @@ let main () =
               "%s" (Digest.string name) in
           Filename.Cache.load id in
       match file with
-      | Some file when String.is_suffix file ".ko" ->
+      | Some file when (String.is_suffix file ".ko"
+                        || String.is_suffix file ".sys") ->
         let id = Data.Cache.digest ~namespace:"ida-brancher"
             "%s" (Digest.file file) in
         let lookup = match Brancher_info.Cache.load id with
@@ -342,7 +346,9 @@ let main () =
         (*printf "%a@." Brancher_info.pp lookup;*)
         let relocs = get_relocs lookup in
         let relocs_other = get_relocs_other lookup in
-        Ida_komapper.main proj relocs relocs_other
+        if String.is_suffix file ".ko"
+        then Ida_komapper.main proj relocs relocs_other
+        else Ida_sysmapper.main proj relocs relocs_other
       | Some file -> info "Komapper skipped: no .ko extension"; proj
       | None -> warning "Komapper skipped: no filename from loader or cache.";
         proj)

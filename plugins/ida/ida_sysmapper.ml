@@ -5,19 +5,20 @@ open Format
 open Regular.Std
 open Graphlib.Std
 
+(** Bil mapper needs to do something different for .sys:
 
-(* DEPRECATED *)
-(*
-let relocs_of_mem proj =
-  let open Option in
-  let mem = Project.memory proj in
-  Memmap.to_sequence mem |> Seq.fold ~init:[] ~f:(fun acc (mem',tag) ->
-      (Value.get comment tag >>= fun s ->
-       Memory.min_addr mem' |> fun w ->
-       let x = Int.of_string s |> Word.of_int ~width:32 in
-       return [(w,x)])
-      |> Option.value ~default:[]
-      |> fun r -> r@acc)
+    00010a1e: calll *0x10a9c
+    {
+    v94 := mem32[0x10A9C:32, el]:u32
+    ESP := ESP - 0x4:32
+    mem32 := mem32 with [ESP, el]:u32 <- 0x10A24:32
+    jmp v94
+    }
+
+    We really want it to just be jmp 0x10A9C to extract the
+    correct symbol. Then we'll see
+
+    jmp IofCompleteReq
 *)
 
 let map_pc_to_dest w relocs =
@@ -25,27 +26,6 @@ let map_pc_to_dest w relocs =
   List.find_map relocs ~f:(fun (pc,dest) -> some_if (w = pc) (dest))
   >>= fun dest -> return (Bil.int dest)
 
-class bil_ko_symbol_relocator relocs = object(self)
-  inherit Stmt.mapper as super
-
-  (** If there's a BIL jmp with an address to one of our assembly
-      addresses, in relocs, it's *probably* jumping to itself, so it
-      is a target for relocation. We substitute it with [w], our
-      address in the table *)
-  (** Problem: there's a BIL jmp to destination 0x2380 which is a fallthrough,
-      and it's not getting picked up here. we should substitute it with that
-      fallthrough dest. But what to do since there can be multiple dests? How
-      do we know it should be the fallthrough and not a conditional? Do
-      conditionals first, then fallthroughs, and cross fingers? *)
-  method map_jmp e =
-    let open Option in
-    match e with
-    | Bil.Int w ->
-      map_pc_to_dest w relocs
-      |> Option.value ~default:(Bil.int w)
-      |> super#map_jmp
-    | _ -> super#map_jmp e
-end
 
 module Cfg = struct
   include Graphs.Cfg
@@ -67,6 +47,22 @@ module Cfg = struct
     update_edge cfg e e'
 end
 
+let remap_sys_dispatch (bil : bil) =
+  let open Option in
+  begin
+    List.hd bil >>= function
+    | Bil.Move (v,Bil.Load (_,e,_,_)) -> return (v,e)
+    | _ -> None
+  end >>= fun (v,e) ->
+  List.rev bil |> List.hd >>= function
+  | Bil.Jmp (Bil.Var v') ->
+    if Var.name v = Var.name v'
+    then match List.rev bil with
+      | hd::tl -> (Bil.jmp e)::tl |> List.rev |> return
+      | _ -> None
+    else None
+  | _ -> None
+
 let full_insn_of_mem mem arch =
   Disasm_expert.Basic.with_disasm ~backend:"llvm" arch
     ~f:(fun dis ->
@@ -76,17 +72,19 @@ let full_insn_of_mem mem arch =
         insn_of_mem dis mem)
 
 let remap_block b memory arch relocs =
-  let bil_remapper = new bil_ko_symbol_relocator relocs in
   let arch = Arch.to_string arch in
   (* We need a full_insn type to reconstruct an Insn with an updated
-      bil. So re-disassemble from mem to get the full_insn type *)
+     bil. So re-disassemble from mem to get the full_insn type *)
   Block.insns b |> List.map ~f:(fun (mem,insn) ->
       let bil = Insn.bil insn in
-      let bil' = bil_remapper#run bil in
-      match full_insn_of_mem mem arch with
-      | Ok (_,Some x,_) ->
-        (mem,Insn.of_basic ~bil:bil' x)
-      | _ -> (mem,insn))
+      match remap_sys_dispatch bil with
+      | None -> (mem,insn)
+      | Some bil' ->
+        match full_insn_of_mem mem arch with
+        | Ok (_,Some x,_) ->
+          printf "Replacement: %a\n" Bil.pp bil';
+          (mem,Insn.of_basic ~bil:bil' x)
+        | _ -> (mem,insn))
   |> Block.create memory
 
 (** Unused for now *)
