@@ -163,7 +163,7 @@ let create_mem pos len endian beg bits size =
   let addr = Addr.of_int64 ~width:(Size.in_bits size) in
   match pos with
   | -1 ->
-    info "Creating synthetic IDA section %s with len %d" name len;
+    info "Creating synthetic IDA section %S with len %d" name len;
     Memory.create ~pos:0 ~len endian (addr Int64.(beg - Int64.of_int 0x4)) bits
   | _ -> Memory.create ~pos ~len endian (addr beg) bits
 
@@ -210,6 +210,7 @@ let loader (futures : ('a,'b,'c) Ida_futures.t) path =
   let code,data = List.fold sections
       ~init:(Memmap.empty,Memmap.empty)
       ~f:(fun (code,data) (name,perm,pos,(beg,len)) ->
+          info "Processing section %S" name;
           let mem_or_error = create_mem pos len endian beg bits size in
           match mem_or_error with
           | Error err ->
@@ -219,7 +220,9 @@ let loader (futures : ('a,'b,'c) Ida_futures.t) path =
             let sec = Value.create Image.section name in
             match perm,name with
             | `code,_ -> Memmap.add code mem sec, data
-            | _,"extern" ->
+            | _,"extern" (* linux .ko modules *)
+            | _,"_idata" -> (* windows .sys drivers *)
+              info "Handling _idata section";
               (* Add "extern" mem to code memmap *)
               let code' = Memmap.add code mem sec in
               code',data
@@ -287,8 +290,9 @@ let run_jump_table_mapper ida_futures =
     ~deps:["ida-ko_symbol_mapper"] (fun proj  ->
 
         match Project.get proj filename with
-        | Some file  -> let id = Data.Cache.digest ~namespace:"ida-brancher"
-                            "%s" (Digest.file file) in
+        | Some file  ->
+          let id = Data.Cache.digest ~namespace:"ida-brancher"
+              "%s" (Digest.file file) in
           let lookup = match Brancher_info.Cache.load id with
             | Some lookup -> lookup
             | None ->
@@ -307,6 +311,34 @@ let run_jump_table_mapper ida_futures =
         | None ->
           warning "No filename found when attempting ko_symbol_mapper pass";
           proj)
+
+let run_sys_mapper ida_futures =
+  Project.register_pass ~autorun:true ~name:"sys_symbol_mapper" (fun proj ->
+      match Project.get proj filename with
+      | Some file when String.is_suffix file ".sys" ->
+        let id = Data.Cache.digest ~namespace:"ida-brancher"
+            "%s" (Digest.file file) in
+        let lookup = match Brancher_info.Cache.load id with
+          | Some lookup -> lookup
+          | None ->
+            info "Sys_symbol_pass: No caching enabled, using futures!";
+            read_ida_future_list (fst ida_futures.brancher) in
+
+        let simpl_relocs lookup =
+          let (!) = Word.of_int64 ~width:32 in
+          List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
+              match List.hd l with
+              | Some dest -> (!addr,!dest)::acc
+              | None -> acc) in
+
+        let simpl_relocs = simpl_relocs lookup in
+        Ida_sys_mapper.main proj simpl_relocs
+      | Some file ->
+        info "Sys_symbol_mapper skipped: no .sys extension";
+        proj
+      | None ->
+        warning "No filename found when attempting sys_symbol_mapper pass";
+        proj)
 
 let load_file path =
   (* A module to cache filename *)
@@ -344,7 +376,8 @@ let main () =
   register_brancher_source ida_futures;
 
   run_ko_symbol_mapper_pass ida_futures;
-  run_jump_table_mapper ida_futures
+  run_jump_table_mapper ida_futures;
+  run_sys_mapper ida_futures
 
 let () =
   let () = Config.manpage [
