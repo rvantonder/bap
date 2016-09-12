@@ -280,6 +280,34 @@ let run_ko_symbol_mapper_pass ida_futures =
         warning "No filename found when attempting ko_symbol_mapper pass";
         proj)
 
+(** XXX: jump table should work on anything, not just ko stuff... no dep needed.
+    But if kernel *does* run, it should come after.*)
+let run_jump_table_mapper ida_futures =
+  Project.register_pass ~autorun:true ~name:"jump_table_mapper"
+    ~deps:["ida-ko_symbol_mapper"] (fun proj  ->
+
+        match Project.get proj filename with
+        | Some file  -> let id = Data.Cache.digest ~namespace:"ida-brancher"
+                            "%s" (Digest.file file) in
+          let lookup = match Brancher_info.Cache.load id with
+            | Some lookup -> lookup
+            | None ->
+              info "Ko_symbol_pass: No caching enabled, using futures!";
+              read_ida_future_list (fst ida_futures.brancher) in
+
+          let complex_relocs lookup =
+            let (!) = Word.of_int64 ~width:32 in
+            List.fold ~init:[] lookup ~f:(fun acc (addr,_,l) ->
+                match List.hd l with
+                | Some dest -> (!addr,List.map ~f:(!) l)::acc
+                | None -> acc) in
+
+          let relocs = complex_relocs lookup in
+          Ida_jump_table_mapper.main proj relocs
+        | None ->
+          warning "No filename found when attempting ko_symbol_mapper pass";
+          proj)
+
 let load_file path =
   (* A module to cache filename *)
   let module Filename = Data.Make(
@@ -315,7 +343,8 @@ let main () =
   register_source ida_futures (module Reconstructor);
   register_brancher_source ida_futures;
 
-  run_ko_symbol_mapper_pass ida_futures
+  run_ko_symbol_mapper_pass ida_futures;
+  run_jump_table_mapper ida_futures
 
 let () =
   let () = Config.manpage [

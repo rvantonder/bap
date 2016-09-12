@@ -20,9 +20,9 @@ let filename : string Term.t =
 
 let brancher () : string option Term.t =
   match enum_processors (module Brancher) with
-  | [] | [_] -> Term.const None
+  | [] -> Term.const None
   | names ->
-    let doc = sprintf "Use specified brancher, should be %s" @@
+    let doc = sprintf "Use specified brancher. Possible values are: %s" @@
       Arg.doc_alts_enum names in
     Arg.(value & opt (some (enum names)) None & info ["brancher"] ~doc)
 

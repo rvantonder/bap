@@ -20,5 +20,5 @@ Library bap_ida_plugin
   CompiledObject:   best
   BuildDepends:     bap, bap-ida, cmdliner, bap-arm
   Modules:          Ida_main
-  InternalModules:  Bap_ida_config, Bap_ida_service, Ida_ko_symbol_mapper, Ida_commands, Ida_info
+  InternalModules:  Bap_ida_config, Bap_ida_service, Ida_ko_symbol_mapper, Ida_commands, Ida_info, Ida_jump_table_mapper
   XMETADescription: use ida to provide brancher, rooter, symbolizer and reconstructor
