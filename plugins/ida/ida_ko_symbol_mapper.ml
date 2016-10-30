@@ -3,12 +3,16 @@ open Bap.Std
 include Self ()
 open Graphlib.Std
 
-let map_pc_to_dest w relocs =
+let map_pc_to_dest w relocs (arch : arch) =
   let open Option in
+  let w =
+    match arch with
+    | #Arch.x86 -> Word.(w - (Word.of_int ~width:32 1)) (* x86 hack *)
+    | _ -> w in
   List.find_map relocs ~f:(fun (pc,dest) -> some_if (w = pc) (dest))
   >>= fun dest -> return (Bil.int dest)
 
-class bil_ko_symbol_relocator relocs = object(self)
+class bil_ko_symbol_relocator relocs arch = object(self)
   inherit Stmt.mapper as super
 
   (** If there's a BIL jmp with an address to one of our assembly addresses, in
@@ -19,7 +23,7 @@ class bil_ko_symbol_relocator relocs = object(self)
     let open Option in
     match e with
     | Bil.Int w ->
-      map_pc_to_dest w relocs
+      map_pc_to_dest w relocs arch
       |> Option.value ~default:(Bil.int w)
       |> super#map_jmp
     | _ -> super#map_jmp e
@@ -53,7 +57,7 @@ let full_insn_of_mem mem arch =
         insn_of_mem dis' mem)
 
 let remap_block b memory arch relocs =
-  let bil_remapper = new bil_ko_symbol_relocator relocs in
+  let bil_remapper = new bil_ko_symbol_relocator relocs arch in
   let arch = Arch.to_string arch in
   (* We need a full_insn type to reconstruct an Insn with an updated
       bil. So re-disassemble from mem to get the full_insn type *)

@@ -255,7 +255,7 @@ let checked ida_path is_headless =
 let run_ko_symbol_mapper_pass ida_futures =
   Project.register_pass ~autorun:true ~name:"ko_symbol_mapper" (fun proj ->
       match Project.get proj filename with
-      | Some file when String.is_suffix file ".ko" ->
+      | Some file (*when String.is_suffix file ".ko"*) ->
 
         let id = Data.Cache.digest ~namespace:"ida-brancher"
             "%s" (Digest.file file) in
@@ -274,8 +274,6 @@ let run_ko_symbol_mapper_pass ida_futures =
 
         let relocs = simpl_relocs lookup in
         Ida_ko_symbol_mapper.main proj relocs
-      | Some file -> info "Ko_symbol_mapper skipped: no .ko extension";
-        proj
       | None ->
         warning "No filename found when attempting ko_symbol_mapper pass";
         proj)
