@@ -302,6 +302,18 @@ let run_delete_lr_const_assignments () =
       mapper#run prog |> Project.with_program proj
     )
 
+let run_name_fixer_upper () =
+  Project.register_pass ~autorun:true ~name:"name_fixer_upper" (fun proj ->
+      let fixup_name name =
+        String.chop_prefix name ~prefix:"." in
+      let symtab = Project.symbols proj in
+      let symtab' =
+        Symtab.to_sequence symtab |>
+        Seq.fold ~init:(Symtab.empty) ~f:(fun acc (fn_name,fn_start,fn_cfg) ->
+            match fixup_name fn_name with
+            | Some fn_name' -> Symtab.add_symbol acc (fn_name',fn_start,fn_cfg)
+            | None -> Symtab.add_symbol acc (fn_name,fn_start,fn_cfg)) in
+      Program.lift symtab' |> Project.with_program proj)
 
 (** XXX: jump table should work on anything, not just ko stuff... no dep needed.
     But if kernel *does* run, it should come after.*)
@@ -368,6 +380,8 @@ let main () =
 
   run_ko_symbol_mapper_pass ida_futures;
   run_jump_table_mapper ida_futures;
+  (* ACTIVATE ONLY FOR PIDGIN X86 *)
+  (*run_name_fixer_upper ()*)
   (* ACTIVATE ONLY FOR LIBSYNO *)
   run_delete_lr_const_assignments ()
 
