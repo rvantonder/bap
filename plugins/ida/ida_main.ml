@@ -368,6 +368,7 @@ let main () =
 
   run_ko_symbol_mapper_pass ida_futures;
   run_jump_table_mapper ida_futures;
+  (* ACTIVATE ONLY FOR LIBSYNO *)
   run_delete_lr_const_assignments ()
 
 let () =
