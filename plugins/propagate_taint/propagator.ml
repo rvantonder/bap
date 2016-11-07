@@ -9,7 +9,9 @@ open SM.Let_syntax
 open SM.Monad_infix
 
 type taints = Tid.Set.t Var.Map.t Tid.Map.t
-  [@@deriving bin_io, compare, sexp]
+[@@deriving bin_io, compare, sexp]
+
+let count = ref 0
 
 module Result = struct
   type t = {
@@ -69,7 +71,7 @@ module Result = struct
 end
 
 type result = Result.t
-  [@@deriving bin_io, compare, sexp]
+[@@deriving bin_io, compare, sexp]
 
 let propagate taints vars tid v r : taints =
   let ts = taints r in
@@ -174,8 +176,13 @@ class ['a] main ?deterministic ?random_seed ?reg_policy ?mem_policy proj =
         SM.return r
 
     method! eval_def def =
+      count := !count+1;
       self#taint_free_vars def >>= fun () ->
       super#eval_def def
+
+    method! eval_arg = count := !count+1; super#eval_arg
+
+    method! eval_jmp = count := !count+1; super#eval_jmp
 
     method private taint_free_vars def =
       if is_seeded def
@@ -213,4 +220,6 @@ let run
   let ctxt = new context ~max_steps ~max_loop p in
   let biri = new main ~deterministic ?random_seed ~reg_policy ~mem_policy proj in
   let res = run_from_point p biri point in
-  (Monad.State.exec res ctxt |> Result.of_context)
+  let res' = (Monad.State.exec res ctxt |> Result.of_context) in
+  printf "Insns count: %d\n%!" !count;
+  res'
