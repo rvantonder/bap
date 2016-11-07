@@ -278,6 +278,31 @@ let run_ko_symbol_mapper_pass ida_futures =
         warning "No filename found when attempting ko_symbol_mapper pass";
         proj)
 
+class die_lr =
+  object(self)
+    inherit Term.mapper as super
+
+    method map_blk blk =
+      let open Bil in
+      let open ARM in
+      super#map_blk blk |> fun blk ->
+      Term.filter def_t blk (fun def ->
+          match Def.lhs def, Def.rhs def with
+          | (v, Int _) when (Var.(v = ARM.CPU.lr)) -> false
+          | _ -> true)
+  end
+
+(** Why this? for libsyno, c++, api fails because there is a LR := const
+    instructions in most cases before the call, stopping it from
+    completing the api of R0, R1, registers preceding it*)
+let run_delete_lr_const_assignments () =
+  Project.register_pass ~autorun:true ~name:"die_lr" (fun proj ->
+      let prog = Project.program proj in
+      let mapper = new die_lr in
+      mapper#run prog |> Project.with_program proj
+    )
+
+
 (** XXX: jump table should work on anything, not just ko stuff... no dep needed.
     But if kernel *does* run, it should come after.*)
 let run_jump_table_mapper ida_futures =
@@ -342,7 +367,8 @@ let main () =
   register_brancher_source ida_futures;
 
   run_ko_symbol_mapper_pass ida_futures;
-  run_jump_table_mapper ida_futures
+  run_jump_table_mapper ida_futures;
+  run_delete_lr_const_assignments ()
 
 let () =
   let () = Config.manpage [
