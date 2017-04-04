@@ -15,7 +15,7 @@ let cxx_flags () : unit =
     ~dump:true
     ~short_desc:(fun () -> "c++ flags")
     "cxxflags"
-    (fun () -> "-std=c++11 -fPIC -I$standard_library -I$libdir/bap -Ilib/bap_disasm") |>
+    (fun () -> "-stdlib=libc++ -std=c++11 -fPIC -I$standard_library -I$libdir/bap -Ilib/bap_disasm") |>
   definition_end
 
 let cxx_libs () : unit =
