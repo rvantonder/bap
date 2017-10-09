@@ -26,7 +26,7 @@ end
 
 module Make
     (Corpus : Corpus)
-    (Trie : Trie with type key = Corpus.key) = struct
+    (Trie : Trie.S with type key = Corpus.key) = struct
 
   module Bin = struct
     type t = (int * int) Trie.t [@@deriving bin_io, sexp]
@@ -82,7 +82,6 @@ module Make
   let length = Trie.length
 end
 
-
 module Bytes = struct
   include Make(struct
       type t = mem
@@ -95,7 +94,7 @@ module Bytes = struct
         match Memory.view ~from ~words:length mem with
         | Ok mem -> Some mem
         | _ -> None
-    end)(Memory.Trie.R8)
+    end)(Memory.Trie.Stable.V1.R8)
 
   let find bw ~length ~threshold mem =
     let start = Memory.min_addr mem in
@@ -104,5 +103,4 @@ module Bytes = struct
       | Some n -> loop (Addr.(start ++ n) :: acc) (n+1)
       | None -> List.rev acc in
     loop [] 0
-
 end

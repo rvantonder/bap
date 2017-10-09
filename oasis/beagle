@@ -1,0 +1,29 @@
+Flag beagle
+  Description: Build beagle obfuscated string solver
+  Default: false
+
+Library beagle_plugin
+  Build$: flag(everything) || flag(beagle)
+  Path: plugins/beagle
+  FindlibName: bap-plugin-beagle
+  BuildDepends: bap, bap-microx, bap-beagle-prey, bap-strings
+  InternalModules: Beagle_main
+  XMETADescription: microx powered obfuscated string solver
+  XMETAExtraLines:  tags="deobfuscator, microx, primus, pass, strings"
+
+Library beagle_prey
+  Build$: flag(everything) || flag(beagle)
+  Path: lib/beagle
+  FindlibName: bap-beagle-prey
+  Modules: Beagle_prey
+  BuildDepends: bap, bap-primus
+  XMETADescription: beagle attributes
+
+Library strings_plugin
+  Build$:       flag(everything) || flag(beagle)
+  Path:         plugins/strings
+  FindlibName:  bap-plugin-strings
+  BuildDepends: bap, bap-strings, bap-beagle-prey
+  InternalModules: Strings_main
+  XMETAExtraLines:  tags="pass, strings"
+  XMETADescription: find strings of characters

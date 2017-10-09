@@ -49,10 +49,13 @@ let binary op ~width ~expect x y ctxt =
   let (!$) = Word.of_int ~width in
   assert_equal ~ctxt
     ~printer:Word.to_string
+    ~cmp:Word.equal
     !$expect (op !$x !$y)
 
 let sub = binary Word.Int_exn.sub
 let lshift = binary Word.Int_exn.lshift
+let rshift = binary Word.Int_exn.rshift
+let arshift = binary Word.Int_exn.arshift
 
 let is yes ctxt = assert_bool "doesn't hold" yes
 
@@ -80,18 +83,27 @@ let suite () =
     "13=13-1024|7"   >:: normalized ~n:13 ~add:(-1024) ~width:7;
     "3=3+4|2"        >:: normalized ~n:3 ~add:4 ~width:2;
     "3=3-4|2"        >:: normalized ~n:3 ~add:(-4) ~width:2;
-    "to_string:b0"   >:: to_string ~str:"false" Word.b0;
-    "to_string:b1"   >:: to_string ~str:"true"  Word.b1;
-    "to_string:7|4"  >:: to_string ~str:"0x7:4" Word.(of_int 7 ~width:4);
-    "to_string:7|3"  >:: to_string ~str:"0x7:3" Word.(of_int 7 ~width:3);
-    "to_string:7|2"  >:: to_string ~str:"0x3:2" Word.(of_int 7 ~width:2);
-    "to_string:-1|3" >:: to_string ~str:"0x7:3" Word.(of_int (-1) ~width:3);
+    "to_string:b0"   >:: to_string ~str:"0:1u"  Word.b0;
+    "to_string:b1"   >:: to_string ~str:"1:1u"  Word.b1;
+    "to_string:7|4"  >:: to_string ~str:"7:4u" Word.(of_int 7 ~width:4);
+    "to_string:7|3"  >:: to_string ~str:"7:3u" Word.(of_int 7 ~width:3);
+    "to_string:7|2"  >:: to_string ~str:"3:2u" Word.(of_int 7 ~width:2);
+    "to_string:-1|3" >:: to_string ~str:"7:3u" Word.(of_int (-1) ~width:3);
+    "to_string:-1|3" >:: to_string ~str:"-1:3s" Word.(signed @@ of_int (-1) ~width:3);
     "of_string:b0"   >:: of_string ~str:"false" Word.b0;
     "of_string:b1"   >:: of_string ~str:"true"  Word.b1;
-    "of_string:7|4"  >:: of_string ~str:"0x7:4" Word.(of_int 7 ~width:4);
-    "of_string:7|3"  >:: of_string ~str:"0x7:3" Word.(of_int 7 ~width:3);
-    "of_string:7|2"  >:: of_string ~str:"0x3:2" Word.(of_int 7 ~width:2);
-    "of_string:-1|3" >:: of_string ~str:"0x7:3" Word.(of_int (-1) ~width:3);
+    "of_string:b0"   >:: of_string ~str:"0:1u" Word.b0;
+    "of_string:b1"   >:: of_string ~str:"1:1u"  Word.b1;
+    "of_string:b0"   >:: of_string ~str:"0:1" Word.b0;
+    "of_string:b1"   >:: of_string ~str:"1:1"  Word.b1;
+    "of_string:7|4"  >:: of_string ~str:"7:4u" Word.(of_int 7 ~width:4);
+    "of_string:7|3"  >:: of_string ~str:"7:3u" Word.(of_int 7 ~width:3);
+    "of_string:7|2"  >:: of_string ~str:"3:2u" Word.(of_int 7 ~width:2);
+    "of_string:-1|3" >:: of_string ~str:"7:3u" Word.(of_int (-1) ~width:3);
+    "of_string:7|4"  >:: of_string ~str:"7:4" Word.(of_int 7 ~width:4);
+    "of_string:7|3"  >:: of_string ~str:"7:3" Word.(of_int 7 ~width:3);
+    "of_string:7|2"  >:: of_string ~str:"3:2" Word.(of_int 7 ~width:2);
+    "of_string:-1|3" >:: of_string ~str:"7:3" Word.(of_int (-1) ~width:3);
 
     "chars:0|64le" >:: to_chars Word.(of_int 0 ~width:64)  LittleEndian
       ~expect:[0x0; 0x0; 0x0; 0x0; 0x0; 0x0; 0x0; 0x0];
@@ -216,7 +228,10 @@ let suite () =
     "lognot:13" >:: lognot 0 ~-1 ~width:4;
     "sub" >:: sub ~width:8 ~expect:0xFF 0 1;
     "lshift" >:: lshift ~width:8 ~expect:0x0 0x1 0xA ;
-    (* a small cheatshit for a bit numbering *)
+    "rshift" >:: rshift ~width:8 ~expect:0x3f 0xFF 0x2 ;
+    "arshift" >:: arshift ~width:8 ~expect:0xff 0xFF 0x2 ;
+
+    (* a small cheatsheet for a bit numbering *)
     (** D    A    D    5    *)
     (** FEDC_BA98_7654_3210 *)
     "cast_high:4" >:: bitsub ~expect:(0xD,4)  ~lo:0xC (0xDAD5,16);
@@ -225,7 +240,8 @@ let suite () =
     "cast_low:4"  >:: bitsub ~expect:(0x5,4)  ~hi:0x3 (0xDAD5,16);
     "cast_mid:8"  >:: bitsub ~expect:(0xAD,8) ~hi:0xB ~lo:0x4 (0xDAD5,16);
     "mono_size"   >:: (fun ctxt ->
-        assert_raises Word.Width
-          (fun () -> Word.(Mono.(zero_32 < b0))));
-
+        try
+          ignore Word.(Mono.(zero_32 < b0));
+          assert_string "Monoprhic comparison"
+        with exn -> ());
   ]

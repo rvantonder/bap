@@ -36,6 +36,7 @@ val substitute : t -> mem -> string tag  -> string -> t
 val set : t -> 'a tag -> 'a -> t
 val get : t -> 'a tag -> 'a option
 val has : t -> 'a tag -> bool
+val del : t -> 'a tag -> t
 
 
 module Info : sig
@@ -46,6 +47,7 @@ module Info : sig
   val cfg : cfg stream
   val symtab : symtab stream
   val program : program term stream
+  val spec : Ogre.Doc.t stream
 end
 
 module Input : sig
@@ -53,7 +55,12 @@ module Input : sig
   val file : ?loader:string -> filename:string -> t
   val binary : ?base:addr -> arch -> filename:string -> t
 
-  val create : arch -> string -> code:value memmap -> data: value memmap -> t
+  val create :
+    ?finish:(project -> project) ->
+    arch ->
+    string ->
+    code:value memmap ->
+    data:value memmap -> t
   val register_loader : string -> (string -> t) -> unit
   val available_loaders : unit -> string list
 end
@@ -96,4 +103,4 @@ val passes : unit -> pass list
 
 val restore_state : t -> unit
 
-include Data with type t := t
+include Data.S with type t := t

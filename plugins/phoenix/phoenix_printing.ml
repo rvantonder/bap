@@ -13,11 +13,11 @@ module Make(Env : sig val project : project end) = struct
     let pos =
       Symtab.owners (Project.symbols project) addr |>
       List.hd |> function
-      | None -> sprintf "text_0x%s" (Addr.string_of_value addr)
+      | None -> asprintf "text_%a" Word.pp_hex addr
       | Some (name,entry,cfg) ->
         let off = Addr.Int_exn.(addr - Block.addr entry) in
         if Word.is_zero off then sprintf "%s_ENTRY" name
-        else sprintf "%s_0x%s" name (Word.string_of_value off) in
+        else sprintf "%s_%s" name (Word.string_of_value off) in
     fprintf fmt "%s" pos
 
   (** [pp_seq pp] prints a sequence using given printer [pp] *)
@@ -33,12 +33,11 @@ module Make(Env : sig val project : project end) = struct
 
   let pp_bil : bil pp = Bil.pp
 
-
   let pp_insn_line fmt (mem,insn) =
     pp_print_cut fmt ();
-    pp_print_tab fmt ();
+    pp_print_tab fmt () [@ocaml.warning "-3"];
     Memory.pp fmt mem;
-    pp_print_tab fmt ();
+    pp_print_tab fmt () [@ocaml.warning "-3"];
     Insn.pp fmt insn
 
   let pp_nothing _ () = ()
@@ -78,24 +77,24 @@ module Make(Env : sig val project : project end) = struct
 
   let setup_tab_stops fmt =
     pp_print_as fmt 6 "";
-    pp_set_tab fmt ();
+    pp_set_tab fmt () [@ocaml.warning "-3"];
     pp_print_as fmt 25 "";
-    pp_set_tab fmt ();
+    pp_set_tab fmt () [@ocaml.warning "-3"];
     pp_print_as fmt 20 "";
-    pp_set_tab fmt ()
+    pp_set_tab fmt () [@ocaml.warning "-3"]
 
   (** prints a code as html document  *)
   let pp_code pp fmt v =
     pp_print_cut fmt ();
     pp_open_vbox fmt 0;
-    pp_open_tbox fmt ();
+    pp_open_tbox fmt () [@ocaml.warning "-3"];
     setup_tab_stops fmt;
     fprintf fmt
       "@;@{<html>@{<head>@{<(link
        (rel stylesheet)
        (type css)
        (href ../../../css/code-panel.css))>@}@}@{<body>%a@;@}@}" pp v;
-    pp_close_tbox fmt ();
+    pp_close_tbox fmt () [@ocaml.warning "-3"];
     pp_close_box fmt ();
     pp_print_flush fmt ()
 end

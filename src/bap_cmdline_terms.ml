@@ -35,7 +35,8 @@ let symbolizers () : string list Term.t =
       sprintf "Use a specified symbolizer. If an option is specified
       several times, then symbolizers are merged. Possible values
       are: %s" @@ Arg.doc_alts_enum names in
-    Arg.(value & opt_all (enum names) ["internal"] & info ["symbolizer"] ~doc)
+    let default = List.map names ~f:fst in
+    Arg.(value & opt_all (enum names) default & info ["symbolizer"] ~doc)
 
 let rooters () : string list Term.t =
   match enum_processors (module Rooter) with
@@ -79,10 +80,12 @@ let disassembler () : string Term.t =
       Arg.doc_alts_enum backends in
     Arg.(value & opt (enum backends) "llvm" & info ["disassembler"] ~doc)
 
+let rooters_mem = List.mem ~equal:[%compare.equal : string * string]
+
 let symbols () : string list Term.t =
   let rooters = enum_processors (module Rooter) in
   let sybolzs = enum_processors (module Symbolizer) in
-  match List.filter sybolzs ~f:(List.mem rooters) with
+  match List.filter sybolzs ~f:(rooters_mem rooters) with
   | [] | [_] -> Term.const []
   | names ->
     let doc =
@@ -170,8 +173,15 @@ let load_path : string list Term.t =
        info ["load-path"; "L"] ~doc:load_path_doc ~docv:"PATH")
 
 let list_plugins, list_plugin_doc =
-  let doc = "List available plugins" in
-  Arg.(value & flag & info ["list-plugins"] ~doc), doc
+  let doc =
+    "List all available plugins or list plugins that provide some
+     features, e.g. --list-plugins=disassembler,lifter" in
+  Arg.(value & opt ~vopt:(Some []) (some (list string)) None
+       & info ["list-plugins"] ~doc), doc
+
+let list_tags, list_tags_doc =
+  let doc = "List all available plugin tags" in
+  Arg.(value & flag & info ["list-tags"] ~doc), doc
 
 let disable_plugin, disable_plugin_doc =
   let doc = "Don't load $(i,PLUGIN) automatically" in
@@ -184,7 +194,8 @@ let no_auto_load, no_auto_load_doc =
 
 
 let loader_options = [
-  "-l"; "-L"; "--list-plugins"; "--disable-plugin"; "--disable-autoload"
+  "-l"; "-L"; "--load-path";
+  "--list-plugins"; "--disable-plugin"; "--disable-autoload"
 ]
 
 let common_loader_options = [
@@ -192,6 +203,7 @@ let common_loader_options = [
   `I ("$(b,-l) $(i,PATH)", load_doc);
   `I ("$(b,-L)$(i,PATH)", load_path_doc);
   `I ("$(b,--list-plugins)", list_plugin_doc);
+  `I ("$(b,--list-tags)", list_tags_doc);
   `I ("$(b,--disable-plugin)", disable_plugin_doc);
   `I ("$(b,--disable-autoload)", no_auto_load_doc);
   `I ("$(b,--no-)$(i,PLUGIN)", disable_plugin_doc);

@@ -6,7 +6,7 @@ include Self()
 let output oc syms =
   let output sym =
     Sexp.output_hum oc ([%sexp_of:string * int64 * int64] sym);
-    output_char oc '\n' in
+    Out_channel.output_char oc '\n' in
   let word pro mem = ok_exn (Addr.to_int64 (pro mem)) in
   Symtab.to_sequence syms |> Seq.iter ~f:(fun (name,entry,cfg) ->
       Graphlib.reverse_postorder_traverse (module Graphs.Cfg)
@@ -29,7 +29,9 @@ let () =
       `P "Output symbol information. In the output file, each symbol
           is in format of:
           `(<symbol name> <symbol start address> <symbol end address>)', e.g.,
-          `(malloc 0x11034 0x11038)'"
+          `(malloc 0x11034 0x11038)'";
+      `S "SEE ALSO";
+      `P "$(b,bap-plugin-print)(1), $(b,bap-fsi-benchmark)(1)"
     ] in
   let file = Config.(param (some string) "file" ~docv:"FILE"
                        ~doc:"Dump symbols to the specified $(docv)") in

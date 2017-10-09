@@ -8,10 +8,13 @@ let suite =
     Test_leb128.suite;
   ]
 
+(* JS is changing the inline test interface every minor release,
+   so we need either wait until they stabilize it, or to move,
+   to something better.  *)
 let run_inline_tests () =
-  Ppx_inline_test_lib.Runtime.exit ()
+  eprintf "Warning: ignoring inline tests\n"
 
 let () =
-  if Array.mem Sys.argv "inline-test-runner"
+  if Array.mem ~equal:String.equal Sys.argv "inline-test-runner"
   then run_inline_tests ()
   else run_test_tt_main suite

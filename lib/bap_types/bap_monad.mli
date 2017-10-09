@@ -1,3 +1,5 @@
+[@@@deprecated "[since 2017-04] use new monads library instead"]
+
 open Core_kernel.Std
 open Bap_monad_types
 
@@ -13,7 +15,11 @@ module type S2 = Monad.S2
 module Make(M : Basic) : S with type 'a t := 'a M.t
 module Make2(M : Basic2) : S2 with type ('a,'s) t := ('a,'s) M.t
 
-module State : State with type 'a result = 'a
+module State : sig
+  module type S = State
+  include State with type 'a result = 'a
+                 and type ('a,'e) t = ('a,'e) Monads.Std.Monad.State.t
+end
 
 module T : sig
   module Option : sig

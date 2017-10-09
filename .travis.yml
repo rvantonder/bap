@@ -1,6 +1,7 @@
 language: c
+install: wget https://raw.githubusercontent.com/ocaml/ocaml-ci-scripts/master/.travis-opam.sh
 script: bash -ex .travis-opam.sh
-sudo: false
+sudo: required
 cache:
   directories:
     - $HOME/.opam
@@ -32,6 +33,15 @@ addons:
     - time
     - aspcud
     - dejagnu
-
+    - jq
+    - opam
 env:
-  - FORK_USER=talex5 FORK_BRANCH=containers OPAMYES=true PACKAGE=bap OCAML_VERSION=latest TESTS=false
+  global:
+  - OPAMYES=true PACKAGE=bap TESTS=false OPAM_SWITCH=$OCAML_VERSION
+  matrix:
+  - OCAML_VERSION=4.03 BAP_RUN_TEST=true  BAP_RUN_CHECK=false
+  - OCAML_VERSION=4.03 BAP_RUN_TEST=false BAP_RUN_CHECK=true
+  - OCAML_VERSION=4.04 BAP_RUN_TEST=true  BAP_RUN_CHECK=false
+  - OCAML_VERSION=4.04 BAP_RUN_TEST=false BAP_RUN_CHECK=true
+  - OCAML_VERSION=4.05 BAP_RUN_TEST=true  BAP_RUN_CHECK=false
+  - OCAML_VERSION=4.05 BAP_RUN_TEST=false BAP_RUN_CHECK=true

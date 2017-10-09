@@ -1,5 +1,4 @@
 open Core_kernel.Std
-open Regular.Std
 open Bap_types.Std
 open Or_error
 
@@ -28,7 +27,7 @@ module Bound = struct
   type t =
     | Unbound
     | Bounded of addr * addr
-  [@@deriving sexp_of]
+    [@@deriving sexp_of]
 
   let empty = Unbound
 
@@ -425,7 +424,7 @@ let rev_map_exn : type c . (mem,c) r ->
 
 
 let rev_map ~one_to t tab =
-  try_with (fun () -> rev_map_exn one_to t tab)
+  try_with ~backtrace:true (fun () -> rev_map_exn one_to t tab)
 
 let pp_comma ppf () =
   Format.pp_print_string ppf ", "

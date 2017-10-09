@@ -25,7 +25,7 @@ let create_demangler = function
 
 let should_print = function
   | [] -> fun _ -> true
-  | xs -> List.mem xs
+  | xs -> List.mem xs ~equal:String.equal
 
 
 let find_section_for_addr memory addr =
@@ -189,7 +189,7 @@ module Adt = struct
                        | Some name -> Some (name,mem)
                        | None -> None) in
     let pp_section ppf (name,mem) =
-      fprintf ppf {|Section(%S, 0x%s, "|}
+      fprintf ppf {|Section(%S, %s, "|}
         name (Addr.string_of_value (Memory.min_addr mem));
       Memory.iter ~word_size:`r8 mem ~f:(fun byte ->
           fprintf ppf "%a" pp_byte byte);
@@ -198,7 +198,7 @@ module Adt = struct
 
   let pp_memmap ppf memmap =
     let pp_region ppf mem =
-      pr ppf "Region(0x%s,0x%s)"
+      pr ppf "Region(%s,%s)"
         (Addr.string_of_value (Memory.min_addr mem))
         (Addr.string_of_value (Memory.max_addr mem)) in
     let pp_binding ppf (mem,attr) =
@@ -233,13 +233,13 @@ let pp_addr ppf addr =
 
 let setup_tabs ppf =
   pp_print_as ppf 50 "";
-  pp_set_tab ppf ()
+  pp_set_tab ppf () [@ocaml.warning "-3"]
 
 let print_disasm pp_insn subs secs ppf proj =
   let memory = Project.memory proj in
   let syms = Project.symbols proj in
-  pp_open_tbox ppf ();
-  setup_tabs ppf;
+  pp_open_tbox ppf () [@ocaml.warning "-3"];
+  setup_tabs ppf [@ocaml.warning "-3"];
   Memmap.filter_map memory ~f:(Value.get Image.section) |>
   Memmap.to_sequence |> Seq.iter ~f:(fun (mem,sec) ->
       Symtab.intersecting syms mem |>
@@ -256,7 +256,7 @@ let print_disasm pp_insn subs secs ppf proj =
                   let mem = Block.memory blk in
                   fprintf ppf "%a:@\n" pp_addr (Memory.min_addr mem);
                   Block.insns blk |> List.iter ~f:(pp_insn ppf))));
-  pp_close_tbox ppf ()
+  pp_close_tbox ppf () [@ocaml.warning "-3"]
 
 let pp_bil fmt ppf (mem,insn) =
   let pp_bil ppf = Bil.Io.print ~fmt ppf in
@@ -266,7 +266,7 @@ let pp_bil fmt ppf (mem,insn) =
 
 let pp_insn fmt ppf (mem,insn) =
   Memory.pp ppf mem;
-  pp_print_tab ppf ();
+  pp_print_tab ppf ()  [@ocaml.warning "-3"];
   Insn.Io.print ~fmt ppf insn;
   fprintf ppf "@\n"
 
@@ -338,7 +338,12 @@ let () =
 let () =
   let () = Config.manpage [
       `S "DESCRIPTION";
-      `P "Setup various output formats for project data"
+      `P "Setup various output formats for project data.";
+      `S "SEE ALSO";
+      `P
+        "$(b,bap-plugin-phoenix)(1), $(b,bap-plugin-piqi-printers)(1),
+         $(b,bap-plugin-dump-symbols)(1)"
+
     ] in
   let demangle : string option Config.param =
     let doc = "Demangle symbols, using the specified demangler" in

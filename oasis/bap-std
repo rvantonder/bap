@@ -2,7 +2,7 @@ Flag bap_std
   Description: Build BAP Standard Library
   Default: false
 
-PostInstallCommand: ./postinstall.byte
+PostInstallCommand: ./postinstall.native
 
 Library bap
   Path:            lib/bap
@@ -15,9 +15,10 @@ Library bap
                    bap.sema,
                    bap.types,
                    bap-future,
-                   cmdliner
+                   cmdliner,
+                   regular
   Modules:         Bap
-  InternalModules: Bap_event, Bap_log, Bap_project, Bap_self
+  InternalModules: Bap_event, Bap_log, Bap_project, Bap_self, Bap_synthetic_symbolizer
 
 
 Library types
@@ -26,8 +27,7 @@ Library types
   FindlibParent:   bap
   FindlibName:     types
   CompiledObject:  best
-  BuildDepends:    zarith, uuidm, bap.config, regular, graphlib,
-                   ppx_variants_conv, ppx_enumerate
+  BuildDepends:    monads, zarith, uuidm, bap.config, regular, graphlib, ogre
 
   InternalModules:
                    Bap_addr,
@@ -35,13 +35,18 @@ Library types
                    Bap_attributes,
                    Bap_bil,
                    Bap_bili,
+                   Bap_bili_types,
                    Bap_bil_adt,
                    Bap_biri,
+                   Bap_biri_types,
                    Bap_bitvector,
                    Bap_common,
                    Bap_context,
+                   Bap_eval,
+                   Bap_eval_types,
                    Bap_exp,
                    Bap_expi,
+                   Bap_expi_types,
                    Bap_ir,
                    Bap_ir_graph,
                    Bap_ir_callgraph,
@@ -50,8 +55,9 @@ Library types
                    Bap_int_conversions,
                    Bap_integer,
                    Bap_integer_intf,
-                   Bap_monad_types,
                    Bap_monad,
+                   Bap_monad_types,
+                   Bap_ogre,
                    Bap_result,
                    Bap_size,
                    Bap_state,
@@ -72,7 +78,7 @@ Library bap_image
   Build$:          flag(everything) || flag(bap_std)
   FindlibParent: bap
   FindlibName:   image
-  BuildDepends:  bap.types
+  BuildDepends:  bap.types, ogre
   InternalModules:
                  Bap_fileutils,
                  Bap_image,
@@ -94,7 +100,7 @@ Library disasm
                  bap-future,
                  camlzip,
                  ocamlgraph,
-                 ppx_here
+                 ogre
   InternalModules:
                  Bap_disasm,
                  Bap_disasm_basic,
@@ -206,5 +212,5 @@ Executable "postinstall"
   Path:           tools
   MainIs:         postinstall.ml
   Install:        false
-  CompiledObject: byte
+  CompiledObject: best
   BuildDepends:   bap.config, fileutils

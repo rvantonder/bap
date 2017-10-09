@@ -6,6 +6,7 @@ Library taint_plugin
   Build$:  flag(everything) || flag(taint)
   Path: plugins/taint
   FindlibName: bap-plugin-taint
-  BuildDepends: bap, cmdliner
+  BuildDepends: bap
   InternalModules: Taint_main
   XMETADescription: taint specified terms
+  XMETAExtraLines:  tags="dataflow, pass, taint"

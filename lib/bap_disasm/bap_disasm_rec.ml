@@ -251,7 +251,21 @@ let next dis s =
   let visited = Span.add s.visited (s.addr, Dis.addr dis) in
   loop {s with visited}
 
-let stop_on = [`May_affect_control_flow; `May_load]
+let stop_on = [`Valid]
+
+let relocate brancher lift mem insn =
+  let find_jump dsts =
+    List.find_map dsts ~f:(function
+        | Some addr, `Jump -> Some addr
+        | _ -> None) in
+  let replace_jump bil addr =
+    List.map bil ~f:(function
+        | Bil.Jmp (Bil.Int _) -> Bil.Jmp (Bil.Int addr)
+        | s -> s) in
+  lift mem insn >>= fun bil ->
+  match find_jump (brancher mem insn) with
+  | None -> return bil
+  | Some addr -> return (replace_jump bil addr)
 
 let stage1 ?(rooter=Rooter.empty) lift brancher disasm base =
   let roots =
@@ -259,11 +273,12 @@ let stage1 ?(rooter=Rooter.empty) lift brancher disasm base =
   let addr,roots = match Seq.to_list roots with
     | r :: rs -> r,rs
     | [] -> Memory.min_addr base, [] in
+  let lift = relocate brancher lift in
   let init = {base; addr; visited = Span.empty;
               roots; inits = roots;
               dests = Addr.Table.create (); errors = []; lift} in
   Memory.view ~from:addr base >>= fun mem ->
-  Dis.run disasm mem ~stop_on:[`May_affect_control_flow] ~return ~init
+  Dis.run disasm mem ~stop_on ~return ~init
     ~hit:(fun d mem insn s -> next d (update s mem insn (brancher mem insn)))
     ~invalid:(fun d mem s -> next d (errored s (`Failed_to_disasm mem)))
     ~stopped:next

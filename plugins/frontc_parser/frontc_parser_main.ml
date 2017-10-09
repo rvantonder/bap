@@ -1,10 +1,18 @@
-open Core_kernel.Std
-open Bap_bundle.Std
+open! Core_kernel.Std
 open Bap.Std
 open Bap_c.Std
 include Self()
 open Cabs
-open Option.Monad_infix
+
+let () = Config.manpage [
+    `S "DESCRIPTION";
+    `P
+      "A parser for C header files, that uses FrontC library as a
+     backend. The parser understands GNU attribute syntax, that can
+     be used to pass arbitrary semantic information in the header.";
+    `S "SEE ALSO";
+    `P "$(b,bap-api)(3), $(b,bap-c)(3), $(b,bap-plugin-api)(1)"
+  ]
 
 let int size sign : C.Type.basic = match size,sign with
   | (NO_SIZE,(NO_SIGN|SIGNED)) -> `sint
@@ -173,8 +181,8 @@ let is_signed = function
 
 let resolver lookup = object(self)
   inherit [unit] C.Type.Mapper.base
-  method map_union = self#resolve
-  method map_structure = self#resolve
+  method! map_union = self#resolve
+  method! map_structure = self#resolve
 
   method private resolve t = match t with
     | {C.Type.Compound.fields=[]} -> self#lookup t
@@ -192,7 +200,7 @@ let parse (size : C.Size.base) parse lexbuf =
   let tags = String.Table.create () in
   let gamma name = match Hashtbl.find env name with
     | Some t -> t
-    | None -> `Void in
+    | None -> invalid_argf "unbound type %s" name () in
   let lookup what name = match Hashtbl.find tags name with
     | Some t -> t
     | None -> what name [] in
@@ -238,4 +246,4 @@ let parser size name =
       try Ok (parse size parser lexbuf) with exn ->
         Or_error.of_exn exn)
 
-let () = C.Parser.provide parser
+let () = Config.when_ready @@ fun _ -> C.Parser.provide parser

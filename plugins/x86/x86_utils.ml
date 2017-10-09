@@ -16,8 +16,11 @@ let concat_explist elist =
   List.reduce_exn
     ~f:Bil.(^) elist
 
-(*FIXME: This is conversion from typ to nat1. It's used in cast expressions*)
-let (!!) = function Type.Imm v -> v | _ -> failwith "internal error"
+let bitwidth_of_type = function
+  | Type.Imm v -> v
+  | _ -> failwith "internal error"
+
+let (!!) = bitwidth_of_type
 
 let bytes_of_width t =
   let b = !!t in
@@ -31,12 +34,18 @@ let exp_not = Bil.lnot
 (* exp from int *)
 let int_exp n width = BV.of_int n ~width |> Bil.int
 
+
+(** [ints_mem xs x] is [true] if [x] is a member of the list of
+    integers [xs] *)
+let ints_mem = List.mem ~equal:Int.equal
+
+
 (* the 2 with_width functions are versions of functions that
  * already exist that don't throw away existing width information
  * so that we can avoid calling Typecheck.infer_ast *)
 let extract_element_symbolic_with_width t e n et =
   let t = !!t in
-  Bil.(cast low t (e lsl (n * (int_exp t et))))
+  Bil.(cast low t (e lsr (n * (int_exp t et))))
 
 let extract_byte_symbolic_with_width e n et =
   extract_element_symbolic_with_width (Type.imm 8) e n et
@@ -131,7 +140,7 @@ let sig_to_mask =
   | LSB -> Bitmask
   | MSB -> Bytemask
 
-exception Arch_exception of Arch.x86 * string
+exception Arch_exception of Arch.x86 * string [@@deriving sexp]
 
 (** disfailwith is a non-fatal disassembly exception. *)
 let disfailwith m s =
@@ -387,3 +396,9 @@ let ah_e mode = bits2reg8e mode 4
 let ch_e mode = bits2reg8e mode 5
 let dh_e mode = bits2reg8e mode 6
 let bh_e mode = bits2reg8e mode 7
+
+
+let pp_insn ppf (mem,insn) =
+  Format.fprintf ppf "%a: %s"
+    Addr.pp_hex (Memory.min_addr mem)
+    (Disasm_expert.Basic.Insn.asm insn)

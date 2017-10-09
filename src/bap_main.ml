@@ -10,12 +10,10 @@ open Bap_options
 open Bap_source_type
 include Self()
 
-exception Failed_to_load_file of Error.t
-exception Failed_to_create_project of Error.t
-exception Unknown_format of string
+exception Failed_to_create_project of Error.t [@@deriving sexp]
+exception Pass_not_found of string [@@deriving sexp]
 
-
-let find_source (type t) (module F : Source.Factory with type t = t)
+let find_source (type t) (module F : Source.Factory.S with type t = t)
     field o = Option.(field o >>= F.find)
 
 let brancher = find_source (module Brancher.Factory) brancher
@@ -47,26 +45,6 @@ let symbolizer =
 let rooter =
   merge_sources Rooter.Factory.find rooters ~f:Rooter.union
 
-let project_or_exn = function
-  | Ok p -> p
-  | Error e -> raise (Failed_to_create_project e)
-
-let memory arch file =
-  let width_of_arch = arch |> Arch.addr_size |> Size.in_bits in
-  let addr = Addr.of_int 0 ~width:width_of_arch in
-  Memory.of_file (Arch.endian arch) addr file |> function
-  | Ok mem -> mem
-  | Error err -> raise (Failed_to_load_file err)
-
-let image options =
-  match Image.create ~backend:options.loader options.filename with
-  | Ok (img,[]) -> img
-  | Ok (img,warns) ->
-    if options.verbose then
-      List.iter warns ~f:(fun err -> eprintf "Warning: %a" Error.pp err);
-    img
-  | Error err -> raise (Failed_to_load_file err)
-
 let print_formats_and_exit () =
   Bap_format_printer.run `writers (module Project);
   exit 0
@@ -84,7 +62,7 @@ let args filename argv =
     if is_key arg
     then List.exists transparent_args
         ~f:(fun prefix -> String.is_prefix ~prefix arg)
-    else List.mem transparent_args arg in
+    else List.mem ~equal:String.equal transparent_args arg in
   let inputs = String.Hash_set.of_list @@ list_loaded_units () in
   Array.iteri argv ~f:(fun i arg -> match i with
       | 0 -> ()
@@ -109,7 +87,9 @@ let process options project =
                 List.filter ~f:Project.Pass.autorun |>
                 run_passes project in
   let project = options.passes |>
-                List.filter_map ~f:Project.find_pass |>
+                List.map ~f:(fun p -> match Project.find_pass p with
+                    | Some p -> p
+                    | None -> raise (Pass_not_found p)) |>
                 run_passes project in
   List.iter options.dump ~f:(function
       | `file dst,fmt,ver ->
@@ -143,10 +123,10 @@ let program_info =
   let man = [
     `S "SYNOPSIS";
     `Pre "
-      $(b,$mname) [PLUGIN OPTION]... --list-formats
-      $(b,$mname) [PLUGIN OPTION]... [--source-type=$(i,SOURCE)] --list-plugins
-      $(b,$mname) [PLUGIN OPTION]... --$(i,PLUGIN)-help
-      $(b,$mname) $(i,FILE) [PLUGIN OPTION]... [OPTION]...";
+      $(mname) [PLUGIN OPTION]... --list-formats
+      $(mname) [PLUGIN OPTION]... [--source-type=$(i,SOURCE)] --list-plugins
+      $(mname) [PLUGIN OPTION]... --$(i,PLUGIN)-help
+      $(mname) $(i,FILE) [PLUGIN OPTION]... [OPTION]...";
     `S "DESCRIPTION";
     `P "A frontend to the Binary Analysis Platfrom library.
       The tool allows you to inspect binary programs by printing them
@@ -190,7 +170,8 @@ let program_info =
       `S "BUGS";
       `P "Report bugs to \
           https://github.com/BinaryAnalysisPlatform/bap/issues";
-      `S "SEE ALSO"; `P "$(b,bap-mc)(1)"
+      `S "SEE ALSO";
+      `P "$(b,bap-mc)(1), $(b,bap-byteweight)(1), $(b,bap)(3)"
     ] in
   Term.info "bap" ~version:Config.version ~doc ~man
 let program source =
@@ -228,7 +209,7 @@ let parse_source argv =
   | _ -> raise Unrecognized_source
 
 let run_loader () =
-  let argv,passes = Bap_plugin_loader.run_and_get_passes Sys.argv in
+  let argv,passes = Bap_plugin_loader.run_and_get_passes ["bap-frontend"] Sys.argv in
   let print_formats =
     Cmdliner.Term.eval_peek_opts Bap_cmdline_terms.list_formats |>
     fst |> Option.value ~default:false in
@@ -240,20 +221,22 @@ let parse passes argv =
   | `Ok (opts, passopt) ->
     let passes = passopt @ passes in
     { opts with Bap_options.passes }
+  | `Error _ -> exit 1;
   | _ -> exit 0
 
 let error fmt =
   kfprintf (fun ppf -> pp_print_newline ppf (); exit 1) err_formatter fmt
-
 
 let () =
   let () =
     try if Sys.getenv "BAP_DEBUG" <> "0" then
         Printexc.record_backtrace true
     with Not_found -> () in
+  Sys.(set_signal sigint (Signal_handle exit));
   Log.start ();
   at_exit (pp_print_flush err_formatter);
   let argv,passes = run_loader () in
+  (* main (parse passes argv); exit 0 *)
   try main (parse passes argv); exit 0 with
   | Unknown_arch arch ->
     error "Invalid arch `%s', should be one of %s." arch
@@ -262,18 +245,21 @@ let () =
     error "Invalid format of source type argument"
   | Bap_plugin_loader.Plugin_not_found name ->
     error "Can't find a plugin bundle `%s'" name
-  | Failed_to_load_file err ->
-    error "Failed to load a file with code: %a" Error.pp err
   | Failed_to_create_project err ->
     error "Failed to create a project: %a" Error.pp err
-  | Unknown_format fmt ->
-    error "Format `%s' is not known" fmt
   | Project.Pass.Failed (Project.Pass.Unsat_dep (p,n)) ->
     error "Dependency `%s' of pass `%s' is not loaded"
       n (Project.Pass.name p)
-  | Project.Pass.Failed (Project.Pass.Runtime_error (p,exn)) ->
-    error "Pass `%s' failed at runtime with: %a"
-      (Project.Pass.name p) Exn.pp exn
+  | Pass_not_found p -> error "Failed to find pass: %s" p
+  | Project.Pass.Failed
+      (Project.Pass.Runtime_error
+         (p, Exn.Reraised (backtrace, (Invalid_argument msg | Failure msg)))) ->
+    error "Pass `%s' failed at runtime with %s\nBacktrace:\n%s"
+      (Project.Pass.name p) msg backtrace
+  | Project.Pass.Failed
+      (Project.Pass.Runtime_error (p, Exn.Reraised (backtrace, exn))) ->
+    error "Pass `%s' failed at runtime with: %a\nBacktrace:\n%s"
+      (Project.Pass.name p) Exn.pp exn backtrace
   | exn ->
     error "Failed with an unexpected exception: %a\nBacktrace:\n%s"
       Exn.pp exn

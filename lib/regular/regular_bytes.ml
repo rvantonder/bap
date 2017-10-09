@@ -1,4 +1,3 @@
-
 module Std_bytes = Bytes
 
 open Core_kernel.Std
@@ -62,14 +61,18 @@ module B = Make(T)
 module S = Make(String)
 
 include T
-include Blit.Make(Elt)(B)
-module To_string = Blit.Make_distinct (Elt)(B)(S)
-module From_string = Blit.Make_distinct (Elt)(S)(B)
+include Blit.Make(B)
+module To_string = Blit.Make_distinct (B)(S)
+module From_string = Blit.Make_distinct (S)(B)
 
-external length: t -> int = "%string_length"
-
+let create = Std_bytes.create
+let length = Std_bytes.length
+let get = Std_bytes.get
+let set = Std_bytes.set
 let convert     = T.unsafe_to_string
 let apply t f   = f (convert t)
+let fold_until t = apply t String.fold_until
+let fold_result t = apply t String.fold_result
 let fold t      = apply t String.fold
 let find t      = apply t String.find
 let iter t      = apply t String.iter
@@ -83,7 +86,7 @@ let to_list t   = apply t String.to_list
 let find_map t  = apply t String.find_map
 let sum m t ~f  = apply t (fun s -> String.sum m s ~f)
 let is_empty t  = apply t String.is_empty
-let mem ?(equal = (=)) t elt = String.mem ~equal (convert t) elt
+let mem t elt = String.mem (convert t) elt
 
 include Identifiable.Make(struct
     type t = T.t [@@deriving bin_io, compare, sexp]
@@ -94,6 +97,8 @@ include Identifiable.Make(struct
   end)
 
 module Unsafe = struct
+  [@@@ocaml.warning "-3"]
+
   let of_string = T.unsafe_of_string
   let to_string = T.unsafe_to_string
 

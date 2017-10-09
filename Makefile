@@ -1,14 +1,16 @@
+ifeq (is$(BAP_DEBUG), $(filter is$(BAP_DEBUG),is is0 isno isdisable isfalse))
 SETUP = ocaml setup.ml -quiet
+else
+SETUP = ocaml setup.ml
+endif
 
 build: setup.ml
 	$(SETUP) -build $(BAPBUILDFLAGS)
 
 .PHONY: doc
 doc:
-	ocaml bapdoc.ml
-
-test: build
-	$(SETUP) -test $(BAPTESTFLAGS)
+	@ocamlbuild -pkg bap bapdoc.native
+	make -C doc
 
 all:
 	$(SETUP) -all $(BAPALLFLAGS)
@@ -32,7 +34,17 @@ distclean:
 
 .PHONY: clean disclean reinstall
 
+.PHONY: test
+
 .PHONY: check
+
+test: build
+ifeq ("$(BAP_RUN_TEST)","true")
+	$(SETUP) -test $(BAPTESTFLAGS)
+endif
+
 check:
-	if [ -d .git ]; then git submodule init; git submodule update; fi
+ifeq ("$(BAP_RUN_CHECK)","true")
+	if [ -d .git ]; then git submodule init; git submodule update; 	fi
 	make -C testsuite
+endif

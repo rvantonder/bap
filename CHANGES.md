@@ -1,118 +1,79 @@
-1.0.0-rc1
-=========
+1.3.0
+=====
 
-1. A more powerful plugin system
+### Features
 
-   A plugin now is an archive, like a Java's jar file, or Mac OS X
-   bundle. The plugin can contain libraries, that are provided by the
-   plugin, libraries on which a plugin depends (optionally), and
-   arbitrary resources. Plugins, are compiled with `bapbuild`, bundled
-   and installed with `bapbundle` tool. The installed plugins are
-   loaded automatically. Most of the functionality is now provided via
-   plugin system and many injection points are added to the library.
-   For example, llvm loader and disassembler, all lifters, byteweight
-   are all now just plugins. Also, the new plugin system is much more
-   safe, as it keeps track of loaded interfaces and prevents state
-   corruption.
-
-   Also, plugins now work in a toplevel.
-
-
-2. Split Bap.Std into several libraries.
-   The following new libraries were added or carved out of the Bap.Std,
-   or bap frontend.
-
-   - Regular - supporting code for regular data types.
-     Implements IO (new Data framework), Regular and Opaque interfaces,
-     and a new Caching interface.
-   - Graphlib - is a separete library that doesn't depend on BAP
-   - Dwarf - parse DWARF infromation
-   - Elf - parse ELF files
-   - Byteweight - find function starts
-   - Traces - new library for loading execution traces
-   - ARM - ARM lifting
-   - X86_cpu - X86 support library with CPU declarations
-   - Demangle - a small library for demangling names
-   - Future - a new library to work with co-inductive values
-   - Ida - a library to interact with IDA
-   - Piqi - a serialization library based on piqi
-   - Text-tags - a library for adding semantic tags to formatters
-
-3. The disassembler layer is severly rewritten
-
-   Now we represent a CFG as a Graplib's graph, instead of `block
-   table`.  The `Symtab` module is now a collection of CFG, so the
-   interface is quite different. The `Disasm` module now is also quite
-   different, as we cleaned up the inteface, and removed functions that
-   weren't very popular but influenced on performace and memory footprint.
-
-   The disassembly level is simplified, there is only one CFG now, with only
-   one instruction type. The instruction type now stores all semantic properties in
-   a bitset. A user can add its own properties to the instruction.
-
-   New reconstruction algorithm is now more precise, but slightly
-   slower.  The reason lies mostly in the LLVM backend, that was
-   imprecise, in his semantic information. Now we don't trust LLVM blindly,
-   but instead use our lifters to provide a better information about instruction
-   semantics.
-
-4. Made project storable and loadable
-
-   The project data structure now can be saved and loaded. The whole
-   state will be correctly restored, including a state stored on
-   module level.  A new caching framework is used to cache the
-   project, that gives a significant speed up, on a usual use case -
-   runing passes over a project.
-
-5. Added new injection points
-
-   BAP now heavily relies on a Dependecy injection principle. The
-   library itself tries not to provide implementations, but instead
-   specifies interfaces. The implementation can be provided by a user
-   using the plugin system. A set of reasonable default
-   implementations, is of course provided. Currently there the following
-   injection points provided by Bap.Std and other libraries in the platform:
-
-   - project pass - arbitrary program transformations or computations;
-   - serialization - provide your own serialization formats;
-   - printing - change or add new printing formats;
-   - loader - support new input formats
-   - disassembler - implement your own disassembler;
-   - targets - to provide lifters
-   - ABI - implement different ABI
-   - symbolizer - name functions
-   - rooter - find function starts
-   - reconstructor - CFG reconstruction algorithms
-   - caching - provide custom support for caching data
-
-   We provide the following set of plugins by default:
-
-   - emit-ida-script  extract a python script from the project data type
-   - dump-symbols     dump symbol information as a list of blocks
-   - arm              provide ARM lifter
-   - piqi-printers    provides piqi serialization for main data types (BIL, IR)
-   - phoenix          output project information in a phoenix format
-   - print            print project in various formats
-   - cache            provide caching services
-   - byteweight       find function starts using Byteweight algorithm
-   - x86              provide x86 lifter
-   - llvm             provide loader and disassembler
-   - ida              use ida to provide rooter, symbolizer and reconstructor
-   - read-symbols     read symbol information from file
-   - elf-loader       read ELF and DWARF formats in a pure OCaml
+- PR#700 LLVM-4.0 is now supported
+- PR#688 Primus - the microexecution framework
+- PR#688 BIL type checker and normalizer
+- PR#688 New constant folding with effect analysis
+- PR#688 SSA transformation plugin
+- PR#688 Dead code elimination plugin
+- PR#688 New pretty-printer for BIL and bitvectors
+- PR#684 Support for cmdliner 1.0
+- PR#682 Severely reduces memory consumption
+- PR#680 New thin bitvector representation
+- PR#663 Adds topic tags to bundle
+- PR#654 New OGRE based loader that supports:
+  - Linux Kernel Modules
+  - MachO Kernel Bundles (LLVM 3.8+ only)
+  - Plain object files
+  - Shared libraries
+- PR#630 Enhancments in IDA plugin
 
 
-6. Added BIL interpreters
+### Bug fixes
 
-   We formally specified BIL semantics and implemented it with several
-   extensible interpreters:
-   - expi - interpreter for an expression sublanguage of BIL
-   - bili - BIL interpreter
-   - biri - IR interpreter
+- PR#688 Type errors in the x86 lifter
+- PR#688 Type errors in the ARM lifter
+- PR#688 Fixes constant folding
+- PR#672 Fixes demangler plugin
+- PR#665 Fixes symbol cases in objdump
+- PR#644 Robustness fixes in x86 lifter
 
-7. Removed bap-server
+1.2.0
+=====
 
+### Features
+- PR#609 compilation with ocaml 4.04.0
+- PR#621 don't store api files in api plugin
+- PR#627 beagle - obfuscated string solver
+- binary release (deb, rpm, tgs)
+- c-bindings
 
+1.1.0
+=====
+
+### Bug fixes
+- PR#586 segfault with short or damaged files fed to bap.
+- PR#590 llvm 3.8 specific issues
+- PR#592 a bug in lifting x86 PSHUFD/PSHUFB instructions
+- PR#595 bap exit status
+- PR#596 most of the compilation warnings
+
+### Features
+- PR#593 bapbundle: it is no longer needed to specify the .plugin extension
+- PR#597 API pass will stop processing in case of the error
+- PR#599 print backtraces from passes
+- PR#600 documented memory interface
+
+1.0.0
+=====
+
+- A powerful plugin system
+- Split Bap.Std into several libraries.
+- The disassembler layer is severly rewritten
+- Made project storable and loadable
+- Added new injection points
+- Added BIL interpreters
+- Removed bap-server
+- New python interface (see https://BinaryAnalysisPlatform/bap-python)
+- New ida integration, that works in both directions
+- Multipass disassembling
+- llvm-3.8 support (#546)
+- new x86 lifter (#549)
+- new testsuite with functional tests (#520)
+- extensible API/ABI (#448)
 
 0.9.9
 =====

@@ -1,0 +1,1 @@
+<lib/bap_llvm/llvm_*.cpp>: use_libllvm

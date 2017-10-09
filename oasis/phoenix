@@ -6,7 +6,7 @@ Library phoenix_plugin
   Build$:           flag(everything) || flag(phoenix)
   Path:             plugins/phoenix
   FindlibName:      bap-plugin-phoenix
-  BuildDepends:     bap, cmdliner, text-tags, ocamlgraph, ezjsonm
+  BuildDepends:     bap, text-tags, ocamlgraph, ezjsonm
   InternalModules:  Phoenix_main,
                     Phoenix_dot,
                     Phoenix_helpers,
@@ -15,3 +15,4 @@ Library phoenix_plugin
                     Phoenix_printing,
                     Phoenix_root
   XMETADescription: output project information in a phoenix format
+  XMETAExtraLines:  tags="printer"

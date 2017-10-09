@@ -1,6 +1,5 @@
 open Core_kernel.Std
 open Regular.Std
-open Bap_common
 open Format
 
 module Typeid = String
@@ -207,5 +206,5 @@ include Regular.Make(struct
       let t = typeof v in
       t.pp ppf (t.of_string v.data)
     let module_name = Some "Bap.Std.Value"
-    let version = "0.2"
+    let version = "1.0.0"
   end)

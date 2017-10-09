@@ -19,16 +19,6 @@ let read_cstring src ~pos_ref : string t =
     pos_ref := (pos + 1); (* move over the null byte  *)
     return dst
 
-let%test_module "read_cstring" = (module struct
-  let str = "hello\000,\000world\000!\000"
-  let pos_ref = ref 0
-  let%test "hello" = read_cstring str ~pos_ref = Ok "hello"
-  let%test "comma" = read_cstring str ~pos_ref = Ok ","
-  let%test "world" = read_cstring str ~pos_ref = Ok "world"
-  let%test "emark" = read_cstring str ~pos_ref = Ok "!"
-  let%test "full"  = String.length str = pos_ref.contents
-end)
-
 let read_leb128 inj str ~pos_ref =
   Leb128.read ~signed:false str ~pos_ref >>=
   Leb128.to_int >>= inj
@@ -46,7 +36,8 @@ let read_word_exn reader size buf ~pos_ref =
   word
 
 let read_word reader ~size str ~pos_ref =
-  try_with (fun () -> read_word_exn reader size str ~pos_ref)
+  try_with ~backtrace:true (fun () ->
+      read_word_exn reader size str ~pos_ref)
 
 let read_as inj reader ~size str ~pos_ref =
   read_word reader ~size str ~pos_ref >>= inj

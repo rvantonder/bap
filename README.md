@@ -1,198 +1,366 @@
 # Overview
 
-[![Join the chat at https://gitter.im/BinaryAnalysisPlatform/bap](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/BinaryAnalysisPlatform/bap?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge) [![Build Status](https://travis-ci.org/BinaryAnalysisPlatform/bap.svg?branch=master)](https://travis-ci.org/BinaryAnalysisPlatform/bap) [![docs](https://img.shields.io/badge/doc-v0.9.9-green.svg)](http://binaryanalysisplatform.github.io/bap/api/v0.9.9/Bap.Std.html) [![docs](https://img.shields.io/badge/doc-master-green.svg)](http://binaryanalysisplatform.github.io/bap/api/master/Bap.Std.html)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/BinaryAnalysisPlatform/bap/blob/master/LICENSE)
+[![Join the chat at https://gitter.im/BinaryAnalysisPlatform/bap](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/BinaryAnalysisPlatform/bap?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![docs](https://img.shields.io/badge/doc-1.3.0-green.svg)](http://binaryanalysisplatform.github.io/bap/api/v1.3.0/argot_index.html)
+[![docs](https://img.shields.io/badge/doc-master-green.svg)](http://binaryanalysisplatform.github.io/bap/api/master/argot_index.html)
+[![Build Status](https://travis-ci.org/BinaryAnalysisPlatform/bap.svg?branch=master)](https://travis-ci.org/BinaryAnalysisPlatform/bap)
+[![pip](https://img.shields.io/badge/pip-1.3.0-green.svg)](https://pypi.python.org/pypi/bap/)
 
-BAP is a platform for binary analysis. It is written in OCaml, but can
-be used from other languages.
+The Binary Analysis Platform is a reverse engineering and program analysis platform 
+that targets binaries, i.e., compiled programs without the source code. BAP supports 
+multiple architectures (more than 30), though the first tier architectures are x86, x86-64, 
+and ARM. BAP operates by disassembling and lifting the binary code into the RISC-like BAP 
+Instruction Language ([BIL](https://github.com/BinaryAnalysisPlatform/bil/releases/download/v0.1/bil.pdf)). 
+Thus the analysis, implemented in BAP, is architecture independent in a sense that it will work equally
+well for all the supported architectures. The platform comes with a set of tools, libraries, and plugins. 
+The main purpose of BAP is to provide a toolkit for automated program analysis. BAP is written 
+in [OCaml](https://ocaml.org/) and it is the preferred language to write analysis, we have bindings to 
+[C](https://github.com/BinaryAnalysisPlatform/bap-bindings),
+[Python](https://github.com/BinaryAnalysisPlatform/bap-python) and
+[Rust](https://github.com/maurer/bap-rust).
 
-# <a name="Installation"></a>Installation
+BAP is developed in [CMU, Cylab](https://www.cylab.cmu.edu/) and is sponsored by various grants 
+from the United States Department of Defense, Siemens AG, and the Korea government, see [sponsors](#Sponsors) for more information.  
 
-BAP is released using `opam` package manager. After you've successfully
-[installed](https://opam.ocaml.org/doc/Install.html) opam, do the following:
+# Table of contents
+* [Installation](#installation)
+  * [Binary](#binary) 
+  * [Sources](#from-sources)
+* [Usage](#usage)
+  * [Shell](#shell)
+  * [OCaml](#ocaml) 
+  * [Python](#python)
+  * [C](#c)
+  * [baptop](#baptop)
+* [Contributing](#contributing)
+* [Sponsors](#sponsors)
+
+# Installation
+
+## Binary
+
+We provide binary packages packed for Debian and Red Hat
+derivatives. For other distributions we provide tgz archives. To
+install bap on a Debian derivative:
 
 ```bash
-$ opam init --comp=4.02.1
-$ eval `opam config env`
-$ opam install depext
-$ opam depext bap
-$ opam install bap
+wget https://github.com/BinaryAnalysisPlatform/bap/releases/download/v1.3.0/{bap,libbap,libbap-dev}_1.3.0.deb
+sudo dpkg -i {bap,libbap,libbap-dev}_1.3.0.deb
 ```
+
+## From sources
+
+The binary release doesn't contain OCaml runtime, and is suitable only
+if you are not going to extend BAP using OCaml programming language
+(the recommended way). We recommend to use the OPAM package manager to
+install BAP and a development environment.  After you've successfully
+[installed](https://opam.ocaml.org/doc/Install.html) OPAM, do the
+following:
+
+```bash
+opam init --comp=4.03.0              # install the compiler
+eval `opam config env`               # activate opam environment
+opam depext --install bap            # install bap
+```
+
+To use a specific version of llvm (we support 3.4, 3.8, and 4.0) specify the desired version explicitly via the `conf-llvm` package, e.g., 
+
+```bash 
+   opam depext --install conf-llvm=3.8
+   opam depext --install conf-llvm=3.8 bap
+```
+
+Got any problems? Then visit our [troubleshooting page](https://github.com/BinaryAnalysisPlatform/bap/wiki/Troubleshooting-installation) 
+or contact us directly via our Gitter [chat](https://gitter.im/BinaryAnalysisPlatform/bap).
 
 # Usage
 
-## Using from OCaml
+## Shell
 
-There're two ways to use BAP: compile your own stand-alone
-application, and use BAP library, or write a plugin, that can still
-use the library, but will also get an access to decompiled binary, as
-well as intergration with tools and other plugins. For the latter,
-write your plugin in OCaml using your
+The BAP main frontend is a command line utility called `bap`. You can
+use it to explore the binary, run existing analysis, plugin your own
+behavior, load traces, and much more.
+
+To dump a program in various formats use the `--dump` option (or its short
+equivalent, `-d`), For example, let's run `bap` on the
+[x86_64-linux-gnu-echo](https://github.com/BinaryAnalysisPlatform/bap-testsuite/blob/master/bin/x86_64-linux-gnu-echo)
+file.
+
+```fortran
+$ bap testsuite/bin/x86_64-linux-gnu-echo -d | grep 'sub print_endline' -A44
+00000334: sub print_endline()
+00000301: 
+00000302: v483 := RBP
+00000303: RSP := RSP - 8
+00000304: mem := mem with [RSP, el]:u64 <- v483
+00000305: RBP := RSP
+00000307: RSP := RSP - 0x20
+0000030e: mem := mem with [RBP + 0xFFFFFFFFFFFFFFE8, el]:u64 <- RDI
+0000030f: RAX := mem[RBP + 0xFFFFFFFFFFFFFFE8, el]:u64
+00000310: mem := mem with [RBP + 0xFFFFFFFFFFFFFFF8, el]:u64 <- RAX
+00000311: goto %00000312
+
+00000312: 
+00000313: RAX := mem[RBP + 0xFFFFFFFFFFFFFFF8, el]:u64
+00000314: RAX := pad:64[pad:32[mem[RAX]]]
+00000315: v545 := low:8[low:32[RAX]]
+0000031b: ZF := 0 = v545
+0000031c: when ~ZF goto %0000032a
+0000031d: goto %0000031e
+
+0000031e: 
+0000031f: RDI := pad:64[0xA]
+00000320: RSP := RSP - 8
+00000321: mem := mem with [RSP, el]:u64 <- 0x400731
+00000322: call @putchar with return %00000323
+
+00000323: 
+00000324: RSP := RBP
+00000325: RBP := mem[RSP, el]:u64
+00000326: RSP := RSP + 8
+00000327: v693 := mem[RSP, el]:u64
+00000328: RSP := RSP + 8
+00000329: return v693
+
+0000032a: 
+0000032b: RAX := mem[RBP + 0xFFFFFFFFFFFFFFF8, el]:u64
+0000032c: RDX := RAX + 1
+0000032d: mem := mem with [RBP + 0xFFFFFFFFFFFFFFF8, el]:u64 <- RDX
+0000032e: RAX := pad:64[pad:32[mem[RAX]]]
+0000032f: RAX := pad:64[extend:32[low:8[low:32[RAX]]]]
+00000330: RDI := pad:64[low:32[RAX]]
+00000331: RSP := RSP - 8
+00000332: mem := mem with [RSP, el]:u64 <- 0x40071C
+00000333: call @putchar with return %00000312
+```
+
+By default, the `--dump` options used the IR format, but you can
+choose from various other formats. Use the `--list-formats` option to
+get the list. However, formats are provided by plugins, so just
+because you don't see your preferred format listed doesn't mean you
+can't generate it. Check OPAM for plugins which may provide the format
+you want to read (the bap-piqi plugin provides protobuf, xml, and
+json, which cover many use cases).
+
+To discover what plugins are currently available, use the
+`--list-plugins` option. A short description will be printed for each
+plugin. The `--list-plugins` option also accepts a list of tags, that 
+will limit the output to plugins that match with the selected tags. For 
+the list of tags use the `--list-tags` option. You can also use 
+the `opam search bap` command, to get the information about bap packages,
+available from OPAM.
+
+To get information about a specific plugin named `<PLUGIN>` use
+the `--<PLUGIN>-help` option, e.g., `bap --llvm-help`.
+
+The `bap` utility works with whole binaries; if you have just few
+bytes with which you would like to tackle, then `bap-mc` is what you
+are looking for.
+
+
+## OCaml
+
+An idiomatic way of using BAP is to extend it with a plugin. Suppose,
+you want to write some analysis. For example, let's estimate the ratio
+of jump instructions to the total amount of instructions (a value that
+probably correlates with a complexity of a program).
+
+So, let's do it. Create an empty folder, then open your
 [favorite text editor](https://github.com/BinaryAnalysisPlatform/bap/wiki/Emacs)
-:
+and write the following program in a `jmp.ml` file:
 
-```sh
-$ cat hello_world.ml
+```ocaml
+open Core_kernel.Std
 open Bap.Std
-let main project = print_endline "Hello, World"
-let () = Project.register_pass' "hello-world" main
+
+let counter = object
+  inherit [int * int] Term.visitor
+  method! enter_term _ _ (jmps,total) = jmps,total+1
+  method! enter_jmp _ (jmps,total) = jmps+1,total
+end
+
+let main proj =
+  let jmps,total = counter#run (Project.program proj) (0,0) in
+  printf "ratio = %d/%d = %g\n" jmps total (float jmps /. float total)
+
+
+let () = Project.register_pass' main
 ```
 
-Next, build it with our `bapbuild` tool:
+Before we run it, let's go through the code. The `counter` object is a
+visitor that has a state consisting of a pair of counters. The first
+counter keeps track of the number of jmp terms, and the second counter
+is incremented every time we enter any term.  The `main` function
+just runs the counter. Finally, we register it with the
+`Project.register_pass'` function. Later the function can be invoked
+from a command line, and it will get a project data structure, that
+contains all the information that was recovered from a binary.
 
-```sh
-$ bapbuild hello_world.plugin
+To compile the plugin simply run the following command:
+
+```
+bapbuild jmp.plugin
 ```
 
-After this you can load your plugin with `-l` command line option, and
-get an immediate access to the decompiled binary:
+It is easier to run the pass, if it is installed, so let's do it:
 
-```sh
-$ bap /bin/ls -lhello-world
+```
+bapbundle install jmp.plugin
 ```
 
-`bapbuild` can compile a standalone applications, not only plugins. In
-fact, `bapbuild` underneath the hood is an `ocamlbuild` utility extended
-with our rules an flags. To compile a standalone binary,
-
-```bash
-$ bapbuild mycoolprog.native
+Now we can test it:
+```
+$ bap /bin/true --pass=jmp
+ratio = 974/7514 = 0.129625
+$ bap /bin/ls --pass=jmp
+ratio = 8917/64557 = 0.138126
 ```
 
-If `bapbuild` complains that something is missing, make sure that you
-didn't skip the [Installation](#Installation) phase. You can add your
-own dependencies with a `-pkg` or `-pkgs` command line options:
+## Python
 
-```bash
-$ bapbuild -pkg lwt mycoolprog.native
+OK, If the previous example doesn't make any sense to you, then you
+can try our
+[Python bindings](https://github.com/BinaryAnalysisPlatform/bap-python).
+Install them with `pip install bap` (you still need to install `bap`
+beforehand). Here is the same example, but in Python:
+
+```python
+import bap
+from bap.adt import Visitor
+
+class Counter(Visitor) :
+    def __init__(self):
+        self.jmps = 0
+        self.total = 0
+
+    def enter_Jmp(self,jmp):
+        self.jmps += 1
+
+    def enter_Term(self,t):
+        self.total += 1
+
+proj = bap.run('/bin/true')
+count = Counter()
+count.run(proj.program)
+print("ratio = {0}/{1} = {2}".format(count.jmps, count.total,
+                                     count.jmps/float(count.total)))
 ```
 
-If you use your own build environment, please make sure that you have
-added `bap` as a dependency. We install our libraries using
-`ocamlfind` and you just need to add `bap` to your project. For
-example, if you use `oasis`, then you should add `bap` to the
-`BuildDepends` field. If you are using `ocamlbuild` with the
-`ocamlfind` plugin, then you should add `package(bap)` or `pkg_bap` to
-your `_tags` file.
+## C
+
+The same program in C will take too much space, and will not fit into
+the README format, but this is an example, of a simple diassembler in C:
+
+```c
+#include <stdio.h>
+#include <bap.h>
+
+char data[] = "\x48\x8d\x00";
+
+int main(int argc, const char **argv) {
+    bap_init(argc, argv);
+
+    if (bap_load_plugins() < 0) {
+        fprintf(stderr, "Failed to load BAP plugins\n");
+        return 1;
+    }
+
+    bap_disasm_basic_t *dis = bap_disasm_basic_create(BAP_ARCH_X86_64);
+
+    if (!dis) {
+        fprintf(stderr, "can't create a disassembler: %s\n", bap_error_get());
+    }
+
+    const int len = sizeof(data) - 1;
+    bap_code_t *code = bap_disasm_basic_next(dis, data, sizeof(data) - 1, 0x80000);
+    if (!code) {
+        fprintf(stderr, "can't disassemble instruction: %s\n", bap_error_get());
+        return 1;
+    }
+    bap_code_print(code);
+    bap_release(code);
+    bap_disasm_basic_close(dis);
+    return 0;
+}
+```
+
+The example can be compiled with the following command (assuming that
+the code is in the `example.c` file):
+
+```
+make LDLIBS=-lbap example
+```
 
 
-## Using from top-level
 
-It maybe a good idea to learn how to use our library by playing in an
-OCaml top-level. If you have installed `utop`, then you can just use
-our `baptop` script to run `utop` with `bap` extensions:
+## baptop
+
+BAP also ships an interactive toplevel, aka REPL. This is a shell-like
+program that will interactively evaluate OCaml instructions and
+print the results. Just run:
 
 ```bash
 $ baptop
 ```
 
-Now, you can play with BAP. The following example, will create a
-project from
-[coreutils_O2_true](https://github.com/BinaryAnalysisPlatform/arm-binaries/raw/master/coreutils/coreutils_O2_true)
-file, build callgraph of a program, control flow graph and dominance
-tree of a `main` function.
+Now, you can play with BAP. The following example will open a file,
+build callgraph of a program, and a control flow graph with a
+dominance tree of a function.
 
 ```ocaml
-utop # open Core_kernel.Std;;
-utop # open Bap.Std;;
-utop # let proj = Project.from_file "coreutils_O2_true" |> ok_exn;;
-utop # let prog = Project.program proj;;
-utop # let cg = Program.to_graph prog;;
-utop # let main = Term.find_exn sub_t prog Tid.(!"@main");;
-utop # let cfg = Sub.to_cfg main;;
-utop # module G = Graphlib.Ir;;
-utop # let entry = Option.value_exn (Term.first blk_t main);;
-utop # let dom_tree = Graphlib.dominators (module G) cfg (G.Node.create entry);;
+open Core_kernel.Std;;
+open Bap.Std;;
+open Graphlib.Std;;
+let rooter = Rooter.Factory.find "byteweight" |> Option.value_exn;;
+let proj = Project.create ~rooter (Project.Input.file "/bin/true") |> ok_exn;;
+let prog = Project.program proj;;
+let cg = Program.to_graph prog;;
+let sub = Term.first sub_t prog |> Option.value_exn;;
+let cfg = Sub.to_cfg sub;;
+module G = Graphs.Ir;;
+let entry = Option.value_exn (Term.first blk_t sub);;
+let dom_tree = Graphlib.dominators (module G) cfg (G.Node.create entry);;
 ```
 
 Note: if you do not want to use `baptop` or `utop`, then you can
 execute the following in any OCaml top-level:
 
 ```ocaml
-# #use "topfind";;
-# #require "bap.top";;
-# open Bap.Std;;
+#use "topfind";;
+#require "bap.top";;
 ```
 
-And everything should work just out of box, i.e. it will load all the
-dependencies, install top-level printers, etc.
+# Learning
 
-
-## Using from shell
-
-Bap is shipped with `bap` utility that can disassemble files, and
-printout dumps in different formats, including plain text, json, dot,
-html. The example of `bap` output is:
-
-```
-00000088: sub strcpy(arg_0, arg_1)
-00000151: arg_0 :: u32 = R0
-00000152: arg_1 :: u32 = R1
-0000005f:
-00000063: ZF.1 := R0 = 0x0:32
-00000064: when ZF.1 return LR
-00000065: goto %00000066
-
-00000066:
-00000067: t_614.1 := mem[R1, el]:u8
-00000068: R3.1 := pad:32[t_614.1]
-0000006c: ZF.2 := R3.1 = 0x0:32
-0000006d: when ZF.2 goto %0000006f
-0000006e: goto %00000076
-
-0000006f:
-00000070: R12.1 := R0
-00000071: goto %00000072
-
-00000072:
-0000012f: R1.1 := phi([R1, %0000006f], [R1.3, %00000086])
-00000131: R12.2 := phi([R12.1, %0000006f], [R12.4, %00000086])
-00000133: R2.1 := phi([R2, %0000006f], [R2.4, %00000086])
-00000135: R3.2 := phi([R3.1, %0000006f], [R3.5, %00000086])
-00000137: mem.1 := phi([mem, %0000006f], [mem.4, %00000086])
-00000073: R3.3 := 0x0:32
-00000074: mem.2 := mem.1 with [R12.2, el]:u8 <- low:8[R3.3]
-00000075: return LR
-...
-```
-
-Also we're shipping a `bap-mc` executable that can disassemble
-arbitrary strings and output them in a plethora of formats. Read
-`bap-mc --help` for more information. `bap-byteweight` utility can be
-used to evaluate our `byteweight` algorithm for finding symbols inside
-the binary. It is also a supporting toolkit for byteweight
-infrastructure, it can download, create and install binary signatures,
-used for identification.
-
-
-## Using from other languages
-
-BAP exposes most of its functionality using `JSON`-based RPC protocol,
-specified
-[Public API Draft](https://github.com/BinaryAnalysisPlatform/bap/wiki/Public-API-%5Bdraft%5D)
-doument. The protocol is implemented by `bap-server` program that is
-shipped with bap by default. You can talk with server using `HTTP`
-protocol, or extend it with any other transporting protocol you would
-like.
-
-## Extending BAP
-
-We're always welcome for any contributions. If you want to add new
-code, or fix a bug, feel free to clone us, and create a pull request.
-
-But BAP can also be extended in a non invasive way, using plugin
-system. That means, that you can use `bap` library, to extend the
-`bap` library! See our
-[blog](http://binaryanalysisplatform.github.io/bap_plugins/) for more
-information.
-
-## Learning BAP
-
-Other than [API](http://binaryanalysisplatform.github.io/bap/api/v0.9.7/Bap.Std.html) documentation, we have [blog](http://binaryanalysisplatform.github.io/bap_plugins/) and
+Other than
+[API](https://binaryanalysisplatform.github.io/bap/api/v1.0.0/argot_index.html)
+documentation, we have
+[blog](https://binaryanalysisplatform.github.io/) and
 [wiki](https://github.com/BinaryAnalysisPlatform/bap/wiki/), where you
 can find some useful information. Also, we have a permanently manned
-chat in case of emergency. Look at the badge on top of the README file,
-and feel free to join.
+chat in case of emergency. Look at the badge on top of the README
+file, and feel free to join.
 
-# License
+# Contributing
 
-Please see the `LICENSE` file for licensing information.
+BAP is a framework, so you don't need to change its code to extend
+it.We use the dependency injection principle with many injection
+points to allow the user to alter BAP behavior. However, bugs happen,
+so if you have any problems, questions or suggestions, please, don't
+hesitate to use our issue tracker. Submitting a pull request with a
+problem fix will make us really happy. However, we will only accepted
+pull requests that have MIT license.
+
+If you wrote analysis with BAP, then don't hesitate to
+[release](https://opam.ocaml.org/doc/Packaging.html) it to OPAM, for
+the benefit of the community.
+
+# <a name="Sponsors"></a>Sponsors
+
+* [DARPA VET Project](https://www.darpa.mil/program/vetting-commodity-it-software-and-firmware)
+* [Siemens AG](https://www.siemens.com/us/en/home.html)
+* Institute for Information & communications Technology Promotion(IITP) grant funded by the Korea government(MSIT)
+  (No.2015-0-00565,Development of Vulnerability Discovery Technologies for IoT Software Security)
+  
+Please, [contact us](https://www.cylab.cmu.edu/partners/index.html) if you would like to become a sponsor.

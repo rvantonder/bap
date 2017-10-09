@@ -50,7 +50,7 @@ module Tid = struct
   module Tid = Regular.Make(struct
       type nonrec t = Int63.t [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Tid"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = Int63.hash
 
@@ -78,7 +78,7 @@ module Tid = struct
     | '@' -> Scanf.sscanf str "@%s" rev_lookup
     | _ -> invalid_arg "label should start from '%' or '@'"
 
-  let from_string str = Or_error.try_with (fun () ->
+  let from_string str = Or_error.try_with ~backtrace:true (fun () ->
       from_string_exn str)
 
   let set_name tid name =
@@ -92,7 +92,7 @@ module Tid = struct
     let set_name_resolver resolver = names := resolver
   end
 
-  let (!) = from_string_exn
+  let (!!) = from_string_exn
   include Tid
 end
 
@@ -324,7 +324,7 @@ module Label = struct
   include Regular.Make(struct
       type t = label [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Label"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = Hashtbl.hash
       let pp ppf = function
@@ -345,7 +345,7 @@ module Call = struct
   include Regular.Make(struct
       type t = call [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Call"
-      let version = "0.1"
+      let version = "1.0.0"
 
 
       let pp_return ppf lab = match lab with
@@ -403,7 +403,7 @@ module Ir_arg = struct
   include Regular.Make(struct
       type t = arg term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Arg"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
 
@@ -440,7 +440,7 @@ module Ir_def = struct
   include Regular.Make(struct
       type t = def term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Def"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
 
@@ -490,7 +490,7 @@ module Ir_phi = struct
   include Regular.Make(struct
       type t = phi term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Phi"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
 
@@ -578,7 +578,7 @@ module Ir_jmp = struct
   include Regular.Make(struct
       type t = jmp term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Jmp"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
 
@@ -1097,8 +1097,9 @@ module Ir_blk = struct
 
 
   let apply_map name get map skip blk ~f =
-    if List.mem skip name then (get blk.self) else
-      Array.map (get blk.self) ~f:(fun x -> map x ~f)
+    if List.mem ~equal:Polymorphic_compare.equal skip name
+    then (get blk.self)
+    else Array.map (get blk.self) ~f:(fun x -> map x ~f)
 
   let map_exp ?(skip=[]) blk ~f = {
     blk with self = {
@@ -1158,7 +1159,7 @@ module Ir_blk = struct
   include Regular.Make(struct
       type t = blk term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Blk"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
 
@@ -1249,6 +1250,10 @@ module Ir_sub = struct
       ~name:"returns-twice"
       ~uuid:"40166004-ea98-431b-81b0-4e74a0b681ee"
 
+  let entry_point = Bap_value.Tag.register (module Unit)
+      ~name:"entry-point"
+      ~uuid:"d1eaff96-4ed4-4405-9305-63508440ccc1"
+
   module Builder = struct
     type t =
       tid option * arg term vector * blk term vector * string option
@@ -1276,7 +1281,7 @@ module Ir_sub = struct
   include Regular.Make(struct
       type t = sub term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Sub"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
       let pp_self ppf self =
@@ -1300,29 +1305,16 @@ module Ir_program = struct
       paths = Tid.Table.create ();
     }
 
-  let def_of_path {self} : path -> def term = function
-    | [| i; j; k |] -> self.subs.(i).self.blks.(j).self.defs.(k)
-    | _ -> assert false
+  let proj1 t cs = t.self.subs.(cs.(0))
+  let proj2 f t cs = (f (proj1 t cs).self).(cs.(1))
+  let proj3 f g t cs = (g (proj2 f t cs).self).(cs.(2))
 
-  let phi_of_path {self} : path -> phi term = function
-    | [| i; j; k |] -> self.subs.(i).self.blks.(j).self.phis.(k)
-    | _ -> assert false
-
-  let jmp_of_path {self} : path -> jmp term = function
-    | [| i; j; k |] -> self.subs.(i).self.blks.(j).self.jmps.(k)
-    | _ -> assert false
-
-  let blk_of_path {self} : path -> blk term = function
-    | [| i; j |] -> self.subs.(i).self.blks.(j)
-    | _ -> assert false
-
-  let arg_of_path {self} : path -> arg term = function
-    | [| i; j |] -> self.subs.(i).self.args.(j)
-    | _ -> assert false
-
-  let sub_of_path {self} : path -> sub term = function
-    | [| i |] -> self.subs.(i)
-    | _ -> assert false
+  let def_of_path = proj3 blks defs
+  let phi_of_path = proj3 blks phis
+  let jmp_of_path = proj3 blks jmps
+  let blk_of_path = proj2 blks
+  let arg_of_path = proj2 args
+  let sub_of_path = proj1
 
   let get_1st get prog tid : (path * 'a) option =
     with_return (fun {return} ->
@@ -1388,8 +1380,7 @@ module Ir_program = struct
     match lookup t p tid with
     | None -> None
     | Some _ ->
-      let child = Tid.Table.find_exn p.self.paths tid in
-      let path = Array.subo ~len:(Array.length child - 1) child in
+      let path = Tid.Table.find_exn p.self.paths tid in
       match t.par with
       | Blk -> Some (blk_of_path p path)
       | Arg -> Some (arg_of_path p path)
@@ -1418,7 +1409,7 @@ module Ir_program = struct
   include Regular.Make(struct
       type t = program term [@@deriving bin_io, compare, sexp]
       let module_name = Some "Bap.Std.Program"
-      let version = "0.1"
+      let version = "1.0.0"
 
       let hash = hash_of_term
       let pp_self ppf self =
