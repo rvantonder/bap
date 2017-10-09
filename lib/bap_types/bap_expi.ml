@@ -64,6 +64,9 @@ module Make(State : Monad.State.S2) = struct
     method update var data  =
       State.update @@ fun s -> s#update var data
 
+    (** Type can break: mem[addr]:u8 for addr:u32 can return data:u32.
+        Should not be the case that we can lookup a 32-bit address and 
+        specify memory size of 8 and get successful lookup for 32-bit value *)
     method load mem addr = match mem#load addr with
         | None -> self#undefined_addr addr
         | Some w -> word w
