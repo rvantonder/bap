@@ -88,9 +88,11 @@ let branch_lookup futures arch path =
   let id = Data.Cache.digest ~namespace:"ida-brancher"
       "%s" (Digest.file path) in
   let lookup = match Brancher_info.Cache.load id with
-    | Some lookup -> lookup
+    | Some lookup ->
+      Format.printf "SUCCESS LOADING BRANCH_INFO : branch_lookup @.";
+      lookup
     | None ->
-      info "Branch lookup: No caching enabled, using futures!";
+      Format.printf "Branch lookup: No caching enabled, using futures!";
       read_ida_future_list (fst futures.brancher)
   in
   match lookup with
@@ -113,11 +115,15 @@ let register_brancher_source streams =
   Brancher.Factory.register name source
 
 let extract futures path arch =
+  Format.printf "EXTRACT ACTIVE@.";
   let id = Data.Cache.digest ~namespace:"ida" "%s" (Digest.file path) in
   let syms = match Symbols.Cache.load id with
-    | Some syms -> syms
+    | Some syms ->
+    Format.printf "SUCCESS LOADING SYMBOLS : extract_lookup @.";
+    syms
     | None ->
-      info "Extract: No caching enabled, using futures!";
+      (* In the non-IDA release, this must never be triggered *)
+      Format.printf "Extract: No caching enabled, using futures!@.";
       read_ida_future_list (fst futures.symbols) in
   let size = Arch.addr_size arch in
   let width = Size.in_bits size in
@@ -126,10 +132,17 @@ let extract futures path arch =
   |> Seq.of_list
 
 let register_source streams (module T : Target) =
+  info "REGISTERING SOURCE T@.";
   let source =
-    let extract file arch = Or_error.try_with (fun () ->
-        extract streams file arch |> T.of_blocks) in
-    Stream.merge Project.Info.file Project.Info.arch ~f:extract in
+    info "XXX DOES THIS EXIST@.";
+    let extract file arch =
+      Or_error.try_with
+        (fun () ->
+           info "EXTRACTION@.";
+           extract streams file arch |> T.of_blocks)
+    in
+    Stream.merge Project.Info.file Project.Info.arch ~f:extract
+  in
   T.Factory.register name source
 
 exception Unsupported_architecture of string
@@ -169,16 +182,27 @@ let create_mem pos len endian beg bits size =
 
 (** If caching is off, we will always send the info to the future *)
 let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
-  let preload ~namespace (type t) (module M : Data with type t = t)
-      command field =
+  let preload
+      ~namespace (type t)
+      (module M : Data with type t = t)
+      command
+      field =
     let id = Data.Cache.digest ~namespace "%s" (Digest.file path) in
     match M.Cache.load id with
-    | Some _ -> ()
+    | Some _ ->
+      Format.printf "M.Cache.load DID NOTHING@.";
+      (* load from cache and fulfill promise *)
+      (* technically not necessary to fulfill promise since
+         other places loads from the cache, not futures *)
+      ()
     | None ->
+      (* Nothing in the cache. use IDA and save the details *)
+      Format.printf "NOTHING IN CACHE. USING IDA : preload_ida_info @.";
       let data = Ida.with_file path command in
       M.Cache.save id data;
       Promise.fulfill (snd (Field.get field futures)) data in
 
+  Format.printf "ITERATING LOADING @.";
   Ida_futures.Fields.iter
     ~img:(preload ~namespace:"ida-loader" (module Img) load_image)
     ~symbols:(preload ~namespace:"ida" (module Symbols) symbolizer_command)
@@ -188,18 +212,24 @@ let preload_ida_info path (futures : ('a,'b,'c) Ida_futures.t) =
 let load_image id futures =
   let read_preloaded_image future =
     match Future.peek future with
-    | Some img -> img
+    | Some img ->
+      Format.printf "PEEKED IMG FROM FUTURE : load_image@.";
+      img
     | None ->
       failwith "IDA is enabled with --loader=ida, but no image was preloaded."
   in
   match Img.Cache.load id with
-  | Some img -> img
+  | Some img ->
+    Format.printf "SUCCESS LOADING IMG : load_image @.";
+    img
   | None ->
-    info "Loader: No caching enabled, using futures!";
+    Format.printf "Loader: No caching enabled, using futures!";
     read_preloaded_image (fst futures.img)
 
 let loader (futures : ('a,'b,'c) Ida_futures.t) path =
+  Format.printf "PRELOADING...@.";
   preload_ida_info path futures;
+  Format.printf "DONE PRELOADING...@.";
 
   let id = Data.Cache.digest ~namespace:"ida-loader" "%s" (Digest.file path) in
   let (proc,size,sections) = load_image id futures in
@@ -260,7 +290,9 @@ let run_ko_symbol_mapper_pass ida_futures =
         let id = Data.Cache.digest ~namespace:"ida-brancher"
             "%s" (Digest.file file) in
         let lookup = match Brancher_info.Cache.load id with
-          | Some lookup -> lookup
+          | Some lookup ->
+            info "SUCCESS LOADING BRANCHER_INFO: run_ko_symbol_mapper_pass@.";
+            lookup
           | None ->
             info "Ko_symbol_pass: No caching enabled, using futures!";
             read_ida_future_list (fst ida_futures.brancher) in
@@ -325,7 +357,9 @@ let run_jump_table_mapper ida_futures =
         | Some file  -> let id = Data.Cache.digest ~namespace:"ida-brancher"
                             "%s" (Digest.file file) in
           let lookup = match Brancher_info.Cache.load id with
-            | Some lookup -> lookup
+            | Some lookup ->
+              info "SUCCESS LOADING BRANCHER_INFO : run_jump_table_mapper";
+              lookup
             | None ->
               info "Ko_symbol_pass: No caching enabled, using futures!";
               read_ida_future_list (fst ida_futures.brancher) in
@@ -343,8 +377,8 @@ let run_jump_table_mapper ida_futures =
           warning "No filename found when attempting ko_symbol_mapper pass";
           proj)
 
+(*
 let load_file path =
-  (* A module to cache filename *)
   let module Filename = Data.Make(
     struct type t = string
       let version = "0.1"
@@ -359,6 +393,7 @@ let load_file path =
     let id = Data.Cache.digest ~namespace:"ida-filename"
         "%s" (Digest.string name) in
     Filename.Cache.load id
+*)
 
 let main () =
   let ida_symbols_info,got_ida_symbols_info = Future.create () in
@@ -366,24 +401,51 @@ let main () =
   let ida_brancher_info,got_ida_brancher_info = Future.create () in
 
   let ida_futures =
-    {symbols = (ida_symbols_info, got_ida_symbols_info);
-     img = (ida_loader_info, got_ida_loader_info);
-     brancher = (ida_brancher_info,got_ida_brancher_info)} in
+    { symbols = (ida_symbols_info, got_ida_symbols_info)
+    ; img = (ida_loader_info, got_ida_loader_info)
+    ; brancher = (ida_brancher_info, got_ida_brancher_info)
+    }
+  in
 
+  info "DOING LOADER@.";
   let loader = loader ida_futures in
+  info "REGISTERING LOADER@.";
   Project.Input.register_loader name loader;
 
+  info "REGISTERING SOURCE ROOTER@.";
   register_source ida_futures (module Rooter);
+  info "REGISTERING SOURCE SYMBOLIZER@.";
   register_source ida_futures (module Symbolizer);
+  info "REGISTERING SOURCE RECONSTRUCTOR@.";
   register_source ida_futures (module Reconstructor);
+  info "REGISTERING SOURCE BRANCHER@.";
   register_brancher_source ida_futures;
 
-  run_ko_symbol_mapper_pass ida_futures;
-  run_jump_table_mapper ida_futures;
+  (* ACTIVATE FOR JUMP TABLE MAPPER *)
+  begin
+    try Sys.getenv "KO" |> ignore;
+      run_ko_symbol_mapper_pass ida_futures;
+    with Not_found -> ()
+  end;
+
   (* ACTIVATE ONLY FOR PIDGIN X86 *)
-  (*run_name_fixer_upper ()*)
+  begin
+    try
+      Sys.getenv "FIX_X86_NAMES" |> ignore;
+      info "APPLYING FIX_X86_NAMES";
+      run_jump_table_mapper ida_futures;
+      run_name_fixer_upper ()
+    with Not_found -> info "NOT APPLYING FIX_X86_NAMES"
+  end;
+
   (* ACTIVATE ONLY FOR LIBSYNO *)
-  run_delete_lr_const_assignments ()
+  begin
+    try
+      Sys.getenv "DEL_LR" |> ignore;
+      info "APPLYING DEL_LR";
+      run_delete_lr_const_assignments ()
+    with Not_found -> info "NOT APPLYING DEL_LR"
+  end
 
 let () =
   let () = Config.manpage [
@@ -399,7 +461,13 @@ let () =
     let doc = "Use headless curses based IDA." in
     Config.(param bool "headless" ~default:Bap_ida_config.is_headless ~doc) in
   Config.when_ready (fun {Config.get=(!)} ->
+      try
+        Sys.getenv "IDA_DISABLED" |> ignore;
+        info "IDA IS DISABLED.";
+        main ()
+      with | Not_found ->
       match checked !path !headless with
       | Result.Ok path -> Bap_ida_service.register path !headless; main ()
       | Result.Error e -> error "%S. Service not registered."
-                            (Error.to_string_hum e))
+                            (Error.to_string_hum e)
+    )

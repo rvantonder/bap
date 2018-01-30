@@ -139,6 +139,7 @@ class ['a] main ?(deterministic=false) p =
       | None -> self#break
       | Some ctxt ->
         SM.put ctxt >>= fun () ->
+        let jmp = Jmp.with_cond jmp (Bil.int Word.b1) in
         super#eval_jmp jmp >>= fun () ->
         SM.get () >>= fun ctxt ->
         match ctxt#next with
