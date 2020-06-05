@@ -6,15 +6,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
-      - run: sudo apt-get install libcurl4-gnutls-dev
       - name: OCaml setup
         uses: avsm/setup-ocaml@master
         with:
           ocaml-version: '4.09.0'
       - run: opam depext -yt bap
+      - run: sudo apt-get install libcurl4-gnutls-dev
       - run: opam install -t . --deps-only
-#     - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
-#     - run: opam pin add -y lsif-ocaml https://github.com/rvantonder/lsif-ocaml.git
+      - run: ./configure --enable-everything
+      - run: make
+      - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
+      - run: opam pin add -y lsif-ocaml https://github.com/rvantonder/lsif-ocaml.git
       - name: Setup tmate session
         uses: mxschmitt/action-tmate@v1
 #     - run: LIBRARY_PATH=$HOME/.opam/4.08.1/lib/hack_parallel opam exec -- dune build
