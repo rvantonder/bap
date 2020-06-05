@@ -13,6 +13,7 @@ jobs:
       - run: opam depext -yt bap
       - run: sudo apt-get install libcurl4-gnutls-dev
       - run: opam install -t . --deps-only
+      - run: opam install oasis
       - run: ./configure --enable-everything
       - run: make
       - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
