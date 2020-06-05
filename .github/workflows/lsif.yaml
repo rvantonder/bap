@@ -10,9 +10,8 @@ jobs:
         uses: avsm/setup-ocaml@master
         with:
           ocaml-version: '4.09.0'
-#     - run: opam pin add bap -n .
-#     - run: opam depext -yt bap
-#     - run: opam install -t . --deps-only
+      - run: opam depext -yt bap
+      - run: opam install -t . --deps-only
 #     - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
 #     - run: opam pin add -y lsif-ocaml https://github.com/rvantonder/lsif-ocaml.git
       - name: Setup tmate session
