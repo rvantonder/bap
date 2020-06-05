@@ -6,11 +6,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
+      - run: sudo apt-get install libcurl4-gnutls-dev
       - name: OCaml setup
         uses: avsm/setup-ocaml@master
         with:
           ocaml-version: '4.09.0'
-      - run: apt-get install libcurl4-gnutls-dev
       - run: opam depext -yt bap
       - run: opam install -t . --deps-only
 #     - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
