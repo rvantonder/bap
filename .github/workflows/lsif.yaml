@@ -9,7 +9,7 @@ jobs:
       - name: OCaml setup
         uses: avsm/setup-ocaml@master
         with:
-          ocaml-version: '4.09.0'
+          ocaml-version: '4.08.0'
       - run: opam depext -yt bap
       - run: sudo apt-get install libcurl4-gnutls-dev
       - run: opam install -t . --deps-only
@@ -18,15 +18,15 @@ jobs:
 #     - run: opam exec -- make
       - run: opam pin add -y merlin-lsif https://github.com/rvantonder/merlin.git\#lsif
       - run: opam pin add -y lsif-ocaml https://github.com/rvantonder/lsif-ocaml.git
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v1
-#     - run: opam exec -- lsif-ocaml-dump
-#     - run: opam exec -- lsif-ocaml -only-type-hovers > dump.lsif
+#     - name: Setup tmate session
+#       uses: mxschmitt/action-tmate@v1
+      - run: opam exec -- lsif-ocaml-dump
+      - run: opam exec -- lsif-ocaml -only-type-hovers > dump.lsif
 #     - run: opam exec -- lsif-ocaml > dump.lsif
-#     - name: Upload LSIF data
-#       uses: sourcegraph/lsif-upload-action@master
-#       continue-on-error: true
-#       with:
-#         endpoint: https://sourcegraph.com
-#         github_token: ${{ secrets.GITHUB_TOKEN }}
-#         file: dump.lsif
+      - name: Upload LSIF data
+        uses: sourcegraph/lsif-upload-action@master
+        continue-on-error: true
+        with:
+          endpoint: https://sourcegraph.com
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dump.lsif
